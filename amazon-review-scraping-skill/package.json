@@ -1,0 +1,25 @@
+{
+  "name": "amazon-review-scraping-skill",
+  "version": "1.0.0",
+  "description": "Amazon review scraping workflow with Playwright anti-bot support, image download, and bilingual Excel export",
+  "main": "scripts/amazon-review-workflow.js",
+  "scripts": {
+    "simple": "node scripts/playwright-simple.js",
+    "stealth": "node scripts/playwright-stealth.js",
+    "amazon:reviews": "node scripts/amazon-review-login-scrape.js",
+    "amazon:workflow": "node scripts/amazon-review-workflow.js"
+  },
+  "keywords": [
+    "amazon",
+    "reviews",
+    "playwright",
+    "scraping",
+    "anti-bot",
+    "excel"
+  ],
+  "author": "Codex",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}
