@@ -102,7 +102,16 @@ async function waitForManualLogin(page, timeoutMs) {
           title,
           needsLogin:
             href.includes('/ap/signin') ||
-            /Sign in|create account|Enter mobile number or email|输入手机号码或邮箱|登入|登录/i.test(text),
+            href.includes('/ap/cvf/') ||
+            href.includes('/ap/mfa') ||
+            href.includes('/errors/validateCaptcha') ||
+            href.includes('/captcha') ||
+            /Amazon Sign-In|Authentication required|Solve this puzzle|Enter the characters|Verify|验证码|输入手机号码或邮箱|登入|登录/i.test(
+              title
+            ) ||
+            /Sign in|create account|Enter mobile number or email|Authentication required|Solve this puzzle|Enter the characters you see below|Verify your identity|输入手机号码或邮箱|登入|登录|验证码/i.test(
+              text
+            ),
         };
       });
     } catch (error) {
@@ -283,7 +292,13 @@ async function main() {
   const mediaDir = path.join(path.dirname(outputPath), `${path.basename(outputPath, path.extname(outputPath))}_media`);
   const sessionRoot = process.env.SESSION_ROOT || path.join(process.cwd(), '.sessions');
   const sessionDir =
-    process.env.SESSION_DIR || path.join(sessionRoot, `amazon-${sanitizeSegment(host)}-${sanitizeSegment(asin)}`);
+    process.env.SESSION_DIR ||
+    path.join(
+      sessionRoot,
+      process.env.SHARED_HOST_SESSION === 'false'
+        ? `amazon-${sanitizeSegment(host)}-${sanitizeSegment(asin)}`
+        : `amazon-${sanitizeSegment(host)}`
+    );
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.mkdirSync(sessionDir, { recursive: true });

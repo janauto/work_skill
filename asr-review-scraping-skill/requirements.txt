@@ -1,0 +1,5 @@
+requests
+openpyxl
+Pillow
+browser-cookie3
+curl_cffi

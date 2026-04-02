@@ -1,6 +1,6 @@
 ---
 name: amazon-review-scraping-skill
-description: End-to-end Amazon review scraping skill for Amazon product pages. Use when users want to scrape Amazon reviews, review images, logged-in review pages, export bilingual Excel files, or need Playwright anti-bot scraping with the same simple and stealth capabilities provided by playwright-scraper-skill.
+description: Preflight-first Amazon review scraping skill for Amazon product pages. Use when users want to search Amazon by 2-3 keywords, generate numbered product-category scope drafts, estimate product and review volume, exclude scenarios before execution, then scrape product reviews, review images, and export bilingual Excel files. Includes the same simple and stealth Playwright capabilities provided by playwright-scraper-skill.
 ---
 
 # Amazon Review Scraping Skill
@@ -42,6 +42,14 @@ These scripts preserve the main capabilities of `playwright-scraper-skill`:
   - Chinese translation columns
 - `scripts/amazon-review-workflow.js`
   One-command wrapper that runs the scrape step and then exports Excel.
+- `scripts/amazon-product-discovery.js`
+  Searches Amazon result pages by keywords and extracts candidate products with review counts.
+- `scripts/amazon-preflight-workflow.js`
+  Default entrypoint. Generates numbered scenario drafts, estimates scope, accepts exclusions such as `不搜索：1、8、11`, and only executes after `开始执行`.
+- `scripts/amazon-competitor-execute.js`
+  Executes the confirmed batch scrape and writes a run manifest plus multi-product workbook.
+- `scripts/amazon-competitor-to-excel.py`
+  Exports a multi-product workbook with `场景与候选商品`、`评论明细`、`抓取汇总`.
 
 If you need the field schema, read [references/amazon-review-output.md](references/amazon-review-output.md).
 
@@ -68,46 +76,83 @@ node scripts/playwright-simple.js "https://example.com"
 HEADLESS=false SAVE_HTML=true node scripts/playwright-stealth.js "https://example.com"
 ```
 
-3. Amazon review scraping, with login/session reuse, images, and export:
+3. Amazon review scraping, with preflight confirmation, login/session reuse, images, and export:
 ```bash
-node scripts/amazon-review-workflow.js "https://www.amazon.sg/dp/B0CYHCGRXM" "./output"
+node scripts/amazon-preflight-workflow.js \
+  --marketplace amazon.sg \
+  --keywords "rca switcher,3.5mm switcher,audio selector" \
+  --category Electronics \
+  --price-min 10 \
+  --price-max 60 \
+  --min-rating 4.0 \
+  --top-n 5 \
+  --output-dir "./output"
 ```
 
 ## Amazon workflow details
 
 ### Fast path
 
-Run the all-in-one workflow:
+Run the preflight workflow:
 
 ```bash
-node scripts/amazon-review-workflow.js "<amazon_product_url>" "<output_dir>"
+node scripts/amazon-preflight-workflow.js \
+  --marketplace amazon.sg \
+  --keywords "keyword1,keyword2,keyword3" \
+  --output-dir "./output"
 ```
 
 Outputs:
-- JSON review file
-- review-image folder
-- Excel workbook
+- `preflight_state.json`
+- 编号场景清单和估算结果
+- 用户回复 `开始执行` 后再生成：
+  - run manifest
+  - per-product review JSON files
+  - review-image folders
+  - multi-product Excel workbook
 
 ### Step-by-step mode
 
-Scrape first:
+1. Generate preflight state:
 
 ```bash
-node scripts/amazon-review-login-scrape.js "<amazon_product_url>" "./output/amazon_reviews.json"
+node scripts/amazon-preflight-workflow.js \
+  --marketplace amazon.sg \
+  --keywords "rca switcher,3.5mm switcher" \
+  --output-dir "./output"
 ```
 
-Then export Excel:
+2. Exclude scenarios if needed:
 
 ```bash
-python3 scripts/amazon-reviews-to-excel.py "./output/amazon_reviews.json" "./output/amazon_reviews.xlsx"
+node scripts/amazon-preflight-workflow.js \
+  --state "./output/preflight_state.json" \
+  --reply "不搜索：1、8、11"
+```
+
+3. Start execution only after confirmation:
+
+```bash
+node scripts/amazon-preflight-workflow.js \
+  --state "./output/preflight_state.json" \
+  --reply "开始执行"
 ```
 
 ## Amazon workflow behavior
 
+- Uses a preflight-first flow
+- Builds numbered category-style scenario drafts from search results
+- Supports exclusions such as `不搜索：1、8、11`
+- Prints:
+  - kept scenario count
+  - candidate product count
+  - estimated review volume
+  - Top N execution preview
+- Starts the real scrape only when the reply is exactly `开始执行`
 - Opens a real Playwright browser with a persistent session directory
 - Reuses an existing session if already logged in
 - Waits for manual login if Amazon redirects to sign-in
-- Scrapes these review views:
+- Scrapes these review views for selected products:
   - `top_reviews`
   - `most_recent`
   - `positive_reviews`
@@ -115,7 +160,7 @@ python3 scripts/amazon-reviews-to-excel.py "./output/amazon_reviews.json" "./out
 - Repeatedly clicks `Show more reviews` when that is the true pagination path
 - Deduplicates reviews by `reviewId`
 - Downloads customer review images into a sibling `_media` directory
-- Writes bilingual Excel columns by default
+- Writes a multi-product workbook by default
 
 ## Useful environment variables
 
@@ -143,6 +188,8 @@ python3 scripts/amazon-reviews-to-excel.py "./output/amazon_reviews.json" "./out
 - `NO_TRANSLATE=true`
   Export Excel without Chinese translations
 - `PYTHON_BIN=python3`
+- `SEARCH_WAIT_MS=2000`
+- `pages=2`
 
 ## Operational guidance
 
@@ -150,13 +197,17 @@ python3 scripts/amazon-reviews-to-excel.py "./output/amazon_reviews.json" "./out
 
 Use `HEADLESS=false`. The script will open the review page and poll until Amazon is no longer on the sign-in flow.
 
+### If the user wants to narrow the search scope
+
+Let the preflight workflow generate the numbered scenario draft first. Then remove unwanted categories by replying with `不搜索：编号1、编号2`.
+
 ### If the review page does not expose normal `pageNumber` paging
 
-Do not assume URL paging works. The Amazon review workflow is designed to click the actual `Show more reviews` control and follow the page state exposed by the live DOM.
+Do not assume URL paging works. The review workflow clicks the actual `Show more reviews` control and follows the live page state.
 
 ### If ratings count is larger than written review count
 
-Treat `global ratings` and written reviews separately. The skill only counts written reviews actually exposed by the logged-in review UI.
+Treat search-result `rating_count` as an estimate only. The final written review count comes from the review page itself.
 
 ### If you only need a quick site scrape
 
@@ -164,8 +215,10 @@ Do not use the Amazon workflow. Use `playwright-simple.js` or `playwright-stealt
 
 ## Examples of when this skill should trigger
 
-- “抓取这个 Amazon 商品的全部评论，并导出 Excel”
-- “打开 Amazon 页面让我登录，登录后继续抓评论和评论图片”
-- “把 Amazon 评论做成带中文翻译的工作簿”
+- “先给我 2-3 个关键词的 Amazon 搜索范围初稿，确认后再抓”
+- “不搜索 1、8、11，剩下的竞品继续保留”
+- “用户确认前不要执行，只有回复开始执行才开始抓”
+- “抓 Amazon 多个竞品的评论和评论图片，并汇总成 Excel”
+- “把 Amazon 评论做成带中文翻译的多商品工作簿”
 - “这个站点有 Cloudflare，用 Playwright stealth 抓一下”
 - “先试简单版 Playwright，不行再切 stealth”

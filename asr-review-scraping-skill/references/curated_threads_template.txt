@@ -1,0 +1,6 @@
+# One ASR thread URL per line.
+# Lines starting with # are ignored.
+
+https://www.audiosciencereview.com/forum/index.php?threads/arx-rs-1-xlr-ab-switcher-review.15328/
+https://www.audiosciencereview.com/forum/index.php?threads/technical-review-of-the-nj-fx-audio-pw-6-%E2%80%9Chifi-audio-power-switcher%E2%80%9D-a-b-switch.41795/
+https://www.audiosciencereview.com/forum/index.php?threads/audio-hub.46704/

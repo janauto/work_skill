@@ -1,0 +1,26 @@
+{
+  "name": "asr-review-scraping-skill",
+  "version": "1.0.0",
+  "description": "ASR Review scraping workflow with Playwright utilities and Excel tagging export",
+  "main": "scripts/playwright-stealth.js",
+  "scripts": {
+    "simple": "node scripts/playwright-simple.js",
+    "stealth": "node scripts/playwright-stealth.js",
+    "asr-fetch": "python3 scripts/fetch_asr_threads.py",
+    "asr-workbook": "python3 scripts/build_asr_workbook.py",
+    "asr-run": "python3 scripts/run_asr_pipeline.py"
+  },
+  "keywords": [
+    "scraper",
+    "playwright",
+    "cloudflare",
+    "anti-detection",
+    "asr",
+    "excel"
+  ],
+  "author": "Codex",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}

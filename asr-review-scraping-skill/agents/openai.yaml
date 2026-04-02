@@ -1,0 +1,3 @@
+display_name: ASR Review Scraping Skill
+short_description: Scrape ASR threads, extract images, and build an Excel tagging workbook.
+default_prompt: Scrape Audio Science Review threads, collect comment images, and export a single-sheet tagging workbook.
