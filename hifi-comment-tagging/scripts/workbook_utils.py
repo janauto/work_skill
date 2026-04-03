@@ -16,6 +16,7 @@ HEADER_ALIASES = {
     "raw_comment": ["原文", "英文评论", "comment", "review", "买家备注", "buyer note", "buyer remark"],
     "translated_comment": ["中文翻译", "翻译", "中文", "translation"],
     "return_reason": ["退货原因", "reason", "return reason"],
+    "return_time": ["退货时间", "return time", "return date", "refund date"],
     "source_row_id": ["原始行号", "row id", "source row"],
     "order_id": ["订单号", "order id"],
     "level_1": ["一级分类", "问题分类：1级", "分类", "人工标签"],
@@ -25,7 +26,7 @@ HEADER_ALIASES = {
 }
 
 PRODUCT_PATTERN = re.compile(
-    r"(?:BOX\s*X\d+|LC\d{2,3}|GR\d{2,3}|ZD\d{1,3}|ZA\d{1,3}|ZP\d{1,3}|P\d{1,3}|Q\d{1,3}|BT\d+[A-Z]*|K\d+[A-Z]*)",
+    r"(?:BOX\s*X\d+|LC\d{2,3}|GR\d{2,3}|ZD\d{1,3}|ZA\d{1,3}|ZP\d{1,3}|MC\d{2,3}|P\d{1,3}|Q\d{1,3}|BT\d+[A-Z]*|K\d+[A-Z]*)",
     re.IGNORECASE,
 )
 INVALID_MARKERS = {
@@ -136,6 +137,8 @@ def infer_source_type(sheet_name: str, column_map: Dict[str, int]) -> str:
     lowered = sheet_name.lower()
     if "售后" in sheet_name or "after" in lowered:
         return "after_sales"
+    if "return_reason" in column_map:
+        return "return"
     if "退货" in sheet_name or "refund" in lowered or "return" in lowered:
         return "return"
     if "评论" in sheet_name or "review" in lowered:
@@ -179,8 +182,11 @@ def row_value(ws, row_idx: int, column_map: Dict[str, int], semantic: str) -> st
     return display_text(ws.cell(row_idx, column_idx).value)
 
 
-def choose_comment_text(record: Dict[str, str]) -> str:
-    for key in ("translated_comment", "raw_comment", "return_reason"):
+def choose_comment_text(record: Dict[str, str], include_return_reason: bool = True) -> str:
+    keys = ["translated_comment", "raw_comment"]
+    if include_return_reason:
+        keys.append("return_reason")
+    for key in keys:
         value = record.get(key, "")
         if not is_invalid_feedback(value):
             return value.strip()
@@ -309,13 +315,26 @@ def collect_rows_for_product(path: str | Path, target_product: str, sheet_name: 
                 "raw_comment": row_value(ws, row_idx, column_map, "raw_comment"),
                 "translated_comment": row_value(ws, row_idx, column_map, "translated_comment"),
                 "return_reason": row_value(ws, row_idx, column_map, "return_reason"),
+                "return_time": row_value(ws, row_idx, column_map, "return_time"),
                 "level_1": row_value(ws, row_idx, column_map, "level_1"),
                 "level_2": row_value(ws, row_idx, column_map, "level_2"),
                 "level_3": row_value(ws, row_idx, column_map, "level_3"),
                 "level_4": row_value(ws, row_idx, column_map, "level_4"),
             }
-            record["cleaned_comment"] = choose_comment_text(record)
-            record["is_valid_feedback"] = not is_invalid_feedback(record["cleaned_comment"])
+            has_free_text = bool(
+                normalize_text(record.get("translated_comment")) or normalize_text(record.get("raw_comment"))
+            )
+            is_return_feedback = profile["source_type"] == "return" and any(
+                column_map.get(name) for name in ("raw_comment", "translated_comment")
+            )
+            record["cleaned_comment"] = choose_comment_text(
+                record, include_return_reason=not is_return_feedback
+            )
+            record["is_valid_feedback"] = (
+                has_free_text and not is_invalid_feedback(record["cleaned_comment"])
+                if is_return_feedback
+                else not is_invalid_feedback(record["cleaned_comment"])
+            )
             record["severity"] = derive_severity(record)
             record["is_user_reason"] = derive_is_user_reason(record)
             record["is_quality_risk"] = derive_is_quality_risk(record)

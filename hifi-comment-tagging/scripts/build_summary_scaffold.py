@@ -4,12 +4,14 @@ from __future__ import annotations
 import argparse
 import re
 from collections import Counter, defaultdict
+from datetime import datetime
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell.rich_text import CellRichText, TextBlock
 from openpyxl.cell.text import InlineFont
 from openpyxl.chart import LineChart, Reference
+from openpyxl.chart.label import DataLabelList
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from workbook_utils import bool_from_value
@@ -17,21 +19,34 @@ from workbook_utils import bool_from_value
 
 HEADER_FILL = PatternFill("solid", fgColor="FF4F81BD")
 TYPE_FILL = PatternFill("solid", fgColor="FFD9EAF7")
-SECTION_FILL = PatternFill("solid", fgColor="FFF2F2F2")
 CATEGORY_FILL = PatternFill("solid", fgColor="FFFFFF99")
 HEADER_FONT = Font(bold=True, color="FFFFFFFF")
-RED_FONT = Font(color="FFFF0000")
+RED_FONT = Font(name="Microsoft YaHei", size=11, color="FFFF0000")
 BASE_FONT = Font(name="Microsoft YaHei", size=11)
 BASE_BOLD_FONT = Font(name="Microsoft YaHei", size=11, bold=True)
 WRAP_TOP = Alignment(wrap_text=True, vertical="top")
-WRAP_CENTER = Alignment(wrap_text=True, vertical="center")
+WRAP_CENTER = Alignment(wrap_text=True, vertical="center", horizontal="center")
 
-RISK_CATEGORIES = {"质量/故障", "品质", "故障", "兼容性", "兼容性/连接问题", "噪音"}
+RISK_CATEGORIES = {
+    "质量/故障",
+    "质量故障",
+    "品质",
+    "故障",
+    "兼容性",
+    "兼容性/连接问题",
+    "兼容连接",
+    "噪音",
+    "噪音问题",
+    "功能需求",
+}
 MACRO_THEME_MAP = {
     "音质": "声音相关",
     "音质/性能体验": "声音相关",
+    "音质体验": "声音相关",
     "噪音": "声音相关",
+    "噪音问题": "声音相关",
     "质量/故障": "品质相关",
+    "质量故障": "品质相关",
     "品质": "品质相关",
     "故障": "品质相关",
     "功能": "功能相关",
@@ -39,14 +54,18 @@ MACRO_THEME_MAP = {
     "接口/连接": "功能相关",
     "兼容性": "兼容与适配",
     "兼容性/连接问题": "兼容与适配",
+    "兼容连接": "兼容与适配",
     "用户": "用户与认知",
     "用户原因": "用户与认知",
     "页面/预期不符": "体验与认知",
+    "页面预期不符": "体验与认知",
     "体验": "体验与认知",
     "价格": "价格与竞品",
     "价格/替代品/竞品": "价格与竞品",
+    "价格竞品": "价格与竞品",
     "降价": "价格与竞品",
     "物流": "交付与包装",
+    "物流包装": "交付与包装",
     "包装/配件/版本问题": "交付与包装",
 }
 PASTEL_FILL_COLORS = [
@@ -70,6 +89,19 @@ def find_input_sheet(wb, requested_sheet=None):
     return wb[wb.sheetnames[0]]
 
 
+def read_metadata(wb):
+    if "Metadata" not in wb.sheetnames:
+        return {}
+    ws = wb["Metadata"]
+    metadata = {}
+    for row_idx in range(2, ws.max_row + 1):
+        key = ws.cell(row_idx, 1).value
+        value = ws.cell(row_idx, 2).value
+        if key:
+            metadata[str(key)] = value
+    return metadata
+
+
 def row_dicts(ws):
     headers = [ws.cell(1, col).value for col in range(1, ws.max_column + 1)]
     for row_idx in range(2, ws.max_row + 1):
@@ -85,31 +117,52 @@ def normalize_theme(level_1):
     return MACRO_THEME_MAP.get(level_1, level_1)
 
 
+def parse_date(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def get_time_value(row):
+    for key in ("return_time", "退货时间", "return_date", "date"):
+        if row.get(key):
+            return row.get(key)
+    return None
+
+
+def build_trend_counter(valid_rows):
+    dates = [parse_date(get_time_value(row)) for row in valid_rows]
+    dates = [dt for dt in dates if dt is not None]
+    if not dates:
+        return Counter(), None
+
+    unique_months = {dt.strftime("%Y-%m") for dt in dates}
+    granularity = "month" if len(unique_months) >= 3 else "day"
+    counter = Counter(
+        dt.strftime("%Y-%m") if granularity == "month" else dt.strftime("%Y-%m-%d") for dt in dates
+    )
+    return counter, granularity
+
+
 def summarize(rows):
-    raw_valid = [row for row in rows if bool_from_value(row.get("is_valid_feedback", True))]
-    valid_rows = []
-    tagged_rows = []
-    pending_rows = []
-    
+    valid_rows = [row for row in rows if bool_from_value(row.get("is_valid_feedback", True))]
+    tagged_rows = [row for row in valid_rows if row.get("level_1")]
     chain_counter = Counter()
     type_counter = Counter()
     subissue_counter = defaultdict(Counter)
     severity_counter = Counter()
     macro_counter = Counter()
 
-    for row in raw_valid:
-        levels = " ".join([str(row.get(f"level_{i}") or "") for i in range(1, 5)])
-        if "待人工" in levels:
-            pending_rows.append(row)
-            continue
-            
-        valid_rows.append(row)
-        
-        if not row.get("level_1"):
-            continue
-            
-        tagged_rows.append(row)
-        
+    for row in tagged_rows:
         l1 = row.get("level_1") or "未分类"
         l2 = row.get("level_2") or ""
         l3 = row.get("level_3") or ""
@@ -121,50 +174,83 @@ def summarize(rows):
         severity = row.get("severity") or "unknown"
         severity_counter[severity] += 1
 
-    return valid_rows, tagged_rows, pending_rows, chain_counter, type_counter, subissue_counter, severity_counter, macro_counter
+    trend_counter, trend_granularity = build_trend_counter(valid_rows)
+    return (
+        valid_rows,
+        tagged_rows,
+        chain_counter,
+        type_counter,
+        subissue_counter,
+        severity_counter,
+        macro_counter,
+        trend_counter,
+        trend_granularity,
+    )
 
 
-def build_summary_text(product, total_rows, valid_rows, type_counter, subissue_counter, macro_counter):
-    # The final summary block stays as full narrative prose.
-    # Short analyst abstractions are only for compact table/list fields elsewhere.
+def build_summary_text(product, metadata, rows, valid_rows, type_counter, subissue_counter, macro_counter, trend_counter, trend_granularity):
+    total_rows = len(rows)
     total_valid = len(valid_rows)
+    matched_rows = int(metadata.get("matched_rows_before_dedupe", total_rows) or total_rows)
+    duplicate_rows = int(metadata.get("duplicate_rows_dropped", 0) or 0)
+    invalid_rows = int(metadata.get("invalid_rows_dropped", max(matched_rows - total_rows - duplicate_rows, 0)) or 0)
+
     if not total_valid:
-        text = f"总结：\n本次聚焦 {product}，共清洗出 {total_rows} 条记录，但暂无可用于汇总的有效反馈。"
-        return text, [], (4, len(text))
+        text = (
+            f"总结：\n本次聚焦 {product}，共匹配到 {matched_rows} 条记录，但当前口径下暂无可用于汇总的有效用户反馈。"
+        )
+        return text, [product, "有效用户反馈"], (4, len(text))
 
     top_three = type_counter.most_common(3)
     top_text = "、".join(f"{name}{count / total_valid:.2%}" for name, count in top_three)
     focus_categories = " 和 ".join(name for name, _ in top_three[:2]) if len(top_three) >= 2 else top_three[0][0]
+
     overview = (
-        f"本次聚焦 {product}，共清洗出 {total_rows} 条记录，其中有效反馈 {total_valid} 条。"
-        f"综合来看，当前用户对 {product} 的核心问题主要集中在 {focus_categories}。"
+        f"本次聚焦 {product}，共匹配到 {matched_rows} 条记录，去重清洗后保留 {total_rows} 条，"
+        f"其中有效反馈 {total_valid} 条。综合来看，当前用户对 {product} 的核心问题主要集中在 {focus_categories}。"
         f"Top3 为 {top_text}。"
     )
+
+    lines = ["总结：", overview]
+    highlight_terms = [product, "有效反馈"]
+    highlight_terms.extend(name for name, _ in top_three)
+    highlight_terms.extend(f"{count / total_valid:.2%}" for _, count in top_three)
+
+    if invalid_rows:
+        lines.append(
+            f"说明：无评论或无效评论 {invalid_rows} 条未纳入有效反馈统计，重复记录额外剔除 {duplicate_rows} 条。"
+        )
+        highlight_terms.extend(["无评论或无效评论", "未纳入有效反馈统计"])
+    elif duplicate_rows:
+        lines.append(f"说明：重复记录剔除 {duplicate_rows} 条。")
+
+    if trend_counter:
+        peak_period, peak_count = trend_counter.most_common(1)[0]
+        trend_name = "月份" if trend_granularity == "month" else "日期"
+        lines.append(f"时间趋势上，{peak_period} 为有效反馈峰值{trend_name}，占全部有效反馈 {peak_count / total_valid:.2%}。")
+        highlight_terms.extend([peak_period, "峰值", f"{peak_count / total_valid:.2%}"])
+
+    lines.append("")
 
     ranked = sorted(
         type_counter.items(),
         key=lambda item: (item[0] not in RISK_CATEGORIES, -item[1], item[0]),
     )
-    lines = ["总结：", overview, ""]
-    highlight_terms = [product]
-    highlight_terms.extend(name for name, _ in top_three)
-    highlight_terms.extend(f"{count / total_valid:.2%}" for _, count in top_three)
-    highlight_terms.extend(name for name, _ in macro_counter.most_common(3))
-
     for index, (category, count) in enumerate(ranked[:4], start=1):
         pct = f"{count / total_valid:.2%}"
         top_subissues = "、".join(name for name, _ in subissue_counter[category].most_common(3) if name) or "需结合原评论进一步复核"
         lines.append(f"{index}、{category}（{pct}）")
-        lines.append(f"主要问题集中在 {top_subissues}")
+        lines.append(f"主要问题集中在 {top_subissues}。")
         lines.append("")
         highlight_terms.extend([category, pct])
-        highlight_terms.extend(name for name, _ in subissue_counter[category].most_common(3))
+        highlight_terms.extend(name for name, _ in subissue_counter[category].most_common(3) if name)
 
     converged = "、".join(f"{name}{count / total_valid:.2%}" for name, count in macro_counter.most_common(4))
     lines.append(f"收敛归纳：可以进一步归并为 {converged}")
+    highlight_terms.extend(name for name, _ in macro_counter.most_common(4))
     if any(name in RISK_CATEGORIES for name in type_counter):
-        lines.append("风险提示：优先排查故障 兼容性 噪音等高风险问题")
-        highlight_terms.extend(["风险提示", "故障", "兼容性", "噪音"])
+        lines.append("风险提示：优先排查故障 兼容性 功率 噪音等高风险问题。")
+        highlight_terms.extend(["风险提示", "故障", "兼容性", "功率", "噪音"])
 
     text = "\n".join(lines).strip()
     bold_start = text.find(overview)
@@ -270,6 +356,8 @@ def copy_source_sheet(source_ws, output_wb, title):
         header = str(column_cells[0].value or "")
         if any(key in header for key in ("评论", "翻译", "comment", "remark")):
             copied.column_dimensions[letter].width = 42
+        elif "时间" in header:
+            copied.column_dimensions[letter].width = 14
         elif any(key in header for key in ("分类", "归因", "product_name", "source_sheet")):
             copied.column_dimensions[letter].width = 20
         else:
@@ -366,71 +454,84 @@ def write_converged_block(summary, type_counter, macro_counter, total_valid, fil
     macro_text = "\n".join(f"{name}\n{count}条\n{count / total_valid:.2%}" for name, count in macro_counter.most_common(4))
     summary.cell(3, 18).value = macro_text
     summary.cell(3, 18).alignment = WRAP_CENTER
-    summary.cell(3, 18).font = Font(bold=True)
+    summary.cell(3, 18).font = BASE_BOLD_FONT
 
     style_percentage_column(summary, "O", 3, row_idx - 1)
     return row_idx
 
 
-def add_visualizations(summary, total_valid, type_counter, macro_counter, start_row):
-    if total_valid < 20 or len(type_counter) < 3:
+def add_time_trend(summary, trend_counter, trend_granularity, total_valid, start_row):
+    if not trend_counter or len(trend_counter) < 2:
         return
 
-    summary.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=5)
-    summary.cell(start_row, 1).value = "图表数据：低彩度折线图"
+    period_label = "月份" if trend_granularity == "month" else "日期"
+    summary.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=3)
+    summary.cell(start_row, 1).value = f"退货趋势：按{period_label}有效反馈"
     style_headers(summary, [f"A{start_row}"], HEADER_FILL)
 
-    summary.cell(start_row + 1, 1).value = "分类"
-    summary.cell(start_row + 1, 2).value = "占比"
-    summary.cell(start_row + 1, 4).value = "收敛大类"
-    summary.cell(start_row + 1, 5).value = "占比"
-    style_headers(summary, [f"A{start_row + 1}", f"B{start_row + 1}", f"D{start_row + 1}", f"E{start_row + 1}"], TYPE_FILL)
+    summary.cell(start_row + 1, 1).value = period_label
+    summary.cell(start_row + 1, 2).value = "有效反馈数"
+    summary.cell(start_row + 1, 3).value = "占比"
+    style_headers(summary, [f"A{start_row + 1}", f"B{start_row + 1}", f"C{start_row + 1}"], TYPE_FILL)
 
-    for idx, (category, count) in enumerate(type_counter.most_common(8), start=start_row + 2):
-        summary.cell(idx, 1).value = category
-        summary.cell(idx, 2).value = count / total_valid
-    for idx, (macro, count) in enumerate(macro_counter.most_common(6), start=start_row + 2):
-        summary.cell(idx, 4).value = macro
-        summary.cell(idx, 5).value = count / total_valid
+    peak_count = trend_counter.most_common(1)[0][1]
+    row_idx = start_row + 2
+    for period, count in sorted(trend_counter.items()):
+        summary.cell(row_idx, 1).value = period
+        summary.cell(row_idx, 2).value = count
+        summary.cell(row_idx, 3).value = count / total_valid
+        summary.cell(row_idx, 3).number_format = "0.00%"
+        summary.cell(row_idx, 3).font = RED_FONT
+        for col_idx in range(1, 4):
+            summary.cell(row_idx, col_idx).alignment = WRAP_TOP
+        if count == peak_count:
+            summary.cell(row_idx, 1).font = BASE_BOLD_FONT
+            summary.cell(row_idx, 2).font = BASE_BOLD_FONT
+            summary.cell(row_idx, 3).font = Font(name="Microsoft YaHei", size=11, bold=True, color="FFFF0000")
+        else:
+            summary.cell(row_idx, 1).font = BASE_FONT
+            summary.cell(row_idx, 2).font = BASE_FONT
+        row_idx += 1
 
-    style_percentage_column(summary, "B", start_row + 2, start_row + 1 + min(len(type_counter), 8))
-    style_percentage_column(summary, "E", start_row + 2, start_row + 1 + min(len(macro_counter), 6))
-
-    line = LineChart()
-    line.title = "核心类别占比走势"
-    line.y_axis.title = "占比"
-    line.height = 7
-    line.width = 13
-    line.style = 2
-    data = Reference(summary, min_col=2, min_row=start_row + 1, max_row=start_row + 1 + min(len(type_counter), 8))
-    cats = Reference(summary, min_col=1, min_row=start_row + 2, max_row=start_row + 1 + min(len(type_counter), 8))
-    line.add_data(data, titles_from_data=True)
-    line.set_categories(cats)
-    if line.ser:
-        line.ser[0].graphicalProperties.line.solidFill = "FF5B9BD5"
-        line.ser[0].graphicalProperties.line.width = 24000
-    summary.add_chart(line, f"G{start_row}")
-
-    if len(macro_counter) >= 3:
-        macro_line = LineChart()
-        macro_line.title = "收敛大类占比走势"
-        macro_line.y_axis.title = "占比"
-        macro_line.height = 7
-        macro_line.width = 13
-        macro_line.style = 2
-        macro_data = Reference(summary, min_col=5, min_row=start_row + 1, max_row=start_row + 1 + min(len(macro_counter), 6))
-        macro_cats = Reference(summary, min_col=4, min_row=start_row + 2, max_row=start_row + 1 + min(len(macro_counter), 6))
-        macro_line.add_data(macro_data, titles_from_data=True)
-        macro_line.set_categories(macro_cats)
-        if macro_line.ser:
-            macro_line.ser[0].graphicalProperties.line.solidFill = "FF7F7F7F"
-            macro_line.ser[0].graphicalProperties.line.width = 24000
-        summary.add_chart(macro_line, f"N{start_row}")
+    chart = LineChart()
+    chart.style = 13
+    chart.height = 7
+    chart.width = 12.5
+    chart.legend = None
+    data = Reference(summary, min_col=2, min_row=start_row + 1, max_row=row_idx - 1)
+    cats = Reference(summary, min_col=1, min_row=start_row + 2, max_row=row_idx - 1)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(cats)
+    if chart.ser:
+        chart.ser[0].marker.symbol = "circle"
+        chart.ser[0].marker.size = 7
+        chart.ser[0].graphicalProperties.line.solidFill = "FF5B9BD5"
+        chart.ser[0].graphicalProperties.line.width = 28575
+        chart.dLbls = DataLabelList()
+        chart.dLbls.showVal = True
+    summary.add_chart(chart, f"F{start_row + 1}")
 
 
-def build_workbook(source_ws, product, total_rows, valid_rows, chain_counter, type_counter, subissue_counter, severity_counter, macro_counter, output_path):
+def build_workbook(
+    source_ws,
+    product,
+    metadata,
+    rows,
+    valid_rows,
+    chain_counter,
+    type_counter,
+    subissue_counter,
+    severity_counter,
+    macro_counter,
+    trend_counter,
+    trend_granularity,
+    output_path,
+    cleaned_ws=None,
+):
     wb = Workbook()
     wb.remove(wb.active)
+    if cleaned_ws is not None:
+        copy_source_sheet(cleaned_ws, wb, "CleanedComments")
     copy_source_sheet(source_ws, wb, "TaggedComments")
     summary = wb.create_sheet("Summary")
 
@@ -441,14 +542,14 @@ def build_workbook(source_ws, product, total_rows, valid_rows, chain_counter, ty
     converged_end = write_converged_block(summary, type_counter, macro_counter, total_valid, fills)
 
     text, highlight_terms, bold_span = build_summary_text(
-        product, total_rows, valid_rows, type_counter, subissue_counter, macro_counter
+        product, metadata, rows, valid_rows, type_counter, subissue_counter, macro_counter, trend_counter, trend_granularity
     )
     summary.merge_cells("R1:Y20")
     summary["R1"] = build_rich_text(text, highlight_terms, bold_span)
     summary["R1"].alignment = WRAP_TOP
 
     chart_start = max(left_end, sorted_end, converged_end, 22)
-    add_visualizations(summary, len(valid_rows), type_counter, macro_counter, chart_start)
+    add_time_trend(summary, trend_counter, trend_granularity, len(valid_rows), chart_start)
 
     for col in ("A", "B", "C", "G", "H", "L", "M", "P", "R"):
         for cell in summary[col]:
@@ -458,19 +559,19 @@ def build_workbook(source_ws, product, total_rows, valid_rows, chain_counter, ty
 
     summary.freeze_panes = "A3"
     summary.column_dimensions["A"].width = 16
-    summary.column_dimensions["B"].width = 26
+    summary.column_dimensions["B"].width = 24
     summary.column_dimensions["C"].width = 28
     summary.column_dimensions["D"].width = 10
     summary.column_dimensions["E"].width = 12
     summary.column_dimensions["G"].width = 16
-    summary.column_dimensions["H"].width = 26
+    summary.column_dimensions["H"].width = 24
     summary.column_dimensions["I"].width = 10
     summary.column_dimensions["J"].width = 12
     summary.column_dimensions["L"].width = 16
     summary.column_dimensions["M"].width = 16
     summary.column_dimensions["N"].width = 10
     summary.column_dimensions["O"].width = 12
-    summary.column_dimensions["P"].width = 16
+    summary.column_dimensions["P"].width = 18
     summary.column_dimensions["R"].width = 18
     summary.column_dimensions["S"].width = 18
     summary.column_dimensions["T"].width = 18
@@ -494,9 +595,21 @@ def main():
 
     workbook_path = Path(args.workbook).resolve()
     wb = load_workbook(workbook_path, data_only=True)
+    metadata = read_metadata(wb)
     source_ws = find_input_sheet(wb, args.sheet)
+    cleaned_ws = wb["CleanedComments"] if "CleanedComments" in wb.sheetnames and source_ws.title != "CleanedComments" else None
     rows = list(row_dicts(source_ws))
-    valid_rows, tagged_rows, pending_rows, chain_counter, type_counter, subissue_counter, severity_counter, macro_counter = summarize(rows)
+    (
+        valid_rows,
+        tagged_rows,
+        chain_counter,
+        type_counter,
+        subissue_counter,
+        severity_counter,
+        macro_counter,
+        trend_counter,
+        trend_granularity,
+    ) = summarize(rows)
     product = args.product or next((row.get("product_name") for row in rows if row.get("product_name")), "目标产品")
     output_path = (
         Path(args.output).resolve()
@@ -506,23 +619,20 @@ def main():
     build_workbook(
         source_ws,
         product,
-        len(rows),
+        metadata,
+        rows,
         valid_rows,
         chain_counter,
         type_counter,
         subissue_counter,
         severity_counter,
         macro_counter,
+        trend_counter,
+        trend_granularity,
         output_path,
+        cleaned_ws=cleaned_ws,
     )
     print(f"Created {output_path}")
-    
-    if pending_rows:
-        import json
-        print("\n--- PENDING MANUAL REVIEW ---")
-        out = [{"record_id": r.get("record_id"), "text": r.get("cleaned_comment"), "tags": [r.get(f"level_{i}") for i in range(1,5)]} for r in pending_rows]
-        print(json.dumps(out, ensure_ascii=False, indent=2))
-        print("-----------------------------")
 
 
 if __name__ == "__main__":

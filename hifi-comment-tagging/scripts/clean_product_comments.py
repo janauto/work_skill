@@ -17,10 +17,12 @@ OUTPUT_COLUMNS = [
     "source_type",
     "source_sheet",
     "source_row",
+    "return_time",
     "store",
     "country",
     "raw_comment",
     "translated_comment",
+    "return_reason",
     "cleaned_comment",
     "is_valid_feedback",
     "level_1",
@@ -33,27 +35,24 @@ OUTPUT_COLUMNS = [
 ]
 
 
-def dedupe_rows(rows, keep_blank=False):
+def dedupe_rows(rows):
     deduped = []
     seen = set()
     dropped = 0
     for row in rows:
-        if not row["is_valid_feedback"] and not keep_blank:
+        if not row["is_valid_feedback"]:
             continue
-        
-        normalized = normalize_text(row["cleaned_comment"])
-        if not normalized and keep_blank:
-            row["is_valid_feedback"] = True
+        # Do not dedupe rows whose only usable text is the standardized return reason.
+        # Those rows are distinct orders even when the reason code string repeats.
+        has_free_text = bool(normalize_text(row.get("translated_comment")) or normalize_text(row.get("raw_comment")))
+        if not has_free_text and normalize_text(row.get("return_reason")):
             deduped.append(row)
             continue
-            
-        key = (row["product_name"], normalized)
+        key = (row["product_name"], normalize_text(row["cleaned_comment"]))
         if key in seen:
             dropped += 1
             continue
         seen.add(key)
-        if keep_blank and not row["is_valid_feedback"]:
-            row["is_valid_feedback"] = True
         deduped.append(row)
     return deduped, dropped
 
@@ -85,7 +84,6 @@ def main():
         "--output",
         help="Output xlsx path. Defaults to <product>_cleaned_comments.xlsx next to the workbook.",
     )
-    parser.add_argument("--keep-blank", action="store_true", help="Keep rows with blank comment text")
     args = parser.parse_args()
 
     workbook_path = Path(args.workbook).resolve()
@@ -96,8 +94,8 @@ def main():
         )
 
     raw_count = len(rows)
-    invalid_count = 0 if args.keep_blank else sum(1 for row in rows if not row["is_valid_feedback"])
-    rows, duplicate_count = dedupe_rows(rows, keep_blank=args.keep_blank)
+    invalid_count = sum(1 for row in rows if not row["is_valid_feedback"])
+    rows, duplicate_count = dedupe_rows(rows)
     by_sheet = Counter(row["source_sheet"] for row in rows)
 
     output_path = (
@@ -108,6 +106,7 @@ def main():
     metadata = {
         "source_workbook": str(workbook_path),
         "target_product": args.product.upper(),
+        "valid_feedback_rule": "return_workbooks_require_free_text_comment",
         "matched_rows_before_dedupe": raw_count,
         "invalid_rows_dropped": invalid_count,
         "duplicate_rows_dropped": duplicate_count,

@@ -8,7 +8,11 @@ Use this structure by default:
 
 ```text
 总结：
-本次聚焦 [产品]，共清洗出 [总记录数] 条记录，其中有效反馈 [有效反馈数] 条。综合来看，当前用户对 [产品] 的核心不满主要集中在 [问题1] 和 [问题2]。Top3 为 [分类1]xx.xx%、[分类2]yy.yy%、[分类3]zz.zz%。
+本次聚焦 [产品]，共匹配 [总记录数] 条记录，去重清洗后保留 [清洗后记录数] 条，其中有效反馈 [有效反馈数] 条。综合来看，当前用户对 [产品] 的核心不满主要集中在 [问题1] 和 [问题2]。Top3 为 [分类1]xx.xx%、[分类2]yy.yy%、[分类3]zz.zz%。
+
+说明：[无评论或无效评论数] 条无评论或无效评论未纳入有效反馈统计。
+
+时间趋势上，[峰值月份或日期] 为有效反馈峰值周期，占全部有效反馈 [峰值占比]。
 
 1、[重点问题1]（xx.xx%）
 主要问题是……
@@ -30,6 +34,7 @@ Adapt the number of points to the evidence. Three or four is usually enough.
 - The single-sentence overview should be bold in Excel rich text.
 - Key labels, percentages, and risk words should be red.
 - Do not color punctuation marks such as `，` `。` `：` `、` `（` `）`.
+- If a highlighted term sits next to punctuation, color only the term itself.
 - Keep the text readable even when no color is available. The wording itself should still make the priority clear.
 - If the workbook contains representative examples in table cells, rewrite those examples into short analyst summaries instead of quoting raw user language.
 - Do not apply that rewriting rule to the final long-form summary. The summary itself should remain complete narrative prose.
@@ -37,6 +42,7 @@ Adapt the number of points to the evidence. Three or four is usually enough.
 ## Writing Rules
 
 - Open with a diagnosis, not with raw counts alone.
+- For return workbooks, separate “matched rows” from “valid feedback rows” and explicitly say that no-comment reason-code rows were excluded.
 - Mention percentages when they help prioritization.
 - Distinguish subjective dissatisfaction from hard failure.
 - Distinguish user mistake from product issue.
@@ -65,6 +71,8 @@ Use phrasing like:
 - `核心不满主要集中在……`
 - `退货前三名为……`
 - `可以进一步收敛为……`
+- `无评论记录已从有效反馈统计中剔除`
+- `时间趋势上，峰值出现在……`
 - `代表诉求可概括为……`
 - `主要问题是用户觉得……`
 - `该需求相对合理，可评估……`

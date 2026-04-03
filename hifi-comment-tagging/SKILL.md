@@ -12,7 +12,6 @@ Clean Excel source data, focus on one product, apply the team's tagging habits, 
 Run this workflow in order:
 
 1. Confirm the target product. If the user did not name one product, stop and ask.
-2. Ask the user if they want to exclude blank data (rows without usable feedback text). If they want to keep blank data, pass `--keep-blank` to `clean_product_comments.py`.
 2. Profile the workbook with `scripts/profile_workbook.py` to identify candidate sheets, headers, and product signals.
 3. Read the input contract in `references/input_contract.md`.
 4. Clean the source data with `scripts/clean_product_comments.py`.
@@ -20,13 +19,12 @@ Run this workflow in order:
 6. Read `references/layout.md` and `references/summary_patterns.md` before generating summary output.
 7. If the workbook is already manually labeled, mine reusable patterns with `scripts/extract_taxonomy_examples.py`.
 8. If tagged rows already exist, build a summary scaffold with `scripts/build_summary_scaffold.py`.
-9. IMPORTANT: Any comments marked as `待人工判定` or `待人工筛查` must NOT be written to the final summary table. `build_summary_scaffold.py` will intercept them and output them. You must list these problematic comments in the chat dialog and ask the customer for guidance before finishing the analysis.
 
 ## Required Input
 
 Require these inputs from the user:
 
-- A target product name, for example `P4`, `ZD3`, `ZA3`, `ZP3`, `LC30`
+- A target product name, for example `P4`, `ZD3`, `ZA3`, `ZP3`, `LC30`, `MC331`
 - At least one `.xlsx` workbook
 - If the workbook has many sheets, ask which sheet is raw data only when profiling cannot determine it
 
@@ -49,8 +47,9 @@ Do not silently mix different products into one summary.
 
 Apply only standard, reviewable cleaning:
 
-- By default, remove empty comments, `NA`, `N/A`, `同上`, `same as above`, and rows without usable feedback text. If the user decides to keep them, use `--keep-blank`.
+- Remove empty comments, `NA`, `N/A`, `同上`, `same as above`, and rows without usable feedback text.
 - Prefer `中文翻译` as the analysis text. Fall back to original comment text when translation is missing.
+- For return workbooks that contain buyer free-text fields such as `买家备注`, treat blank buyer remarks as non-valid feedback by default. Keep the platform return reason for audit, but do not count reason-code-only rows as valid user feedback.
 - Preserve source lineage with workbook path, sheet name, and row number.
 - Remove obvious duplicates based on normalized comment text within the target product.
 - Keep pre-existing manual labels if they are present in the workbook.
@@ -74,6 +73,8 @@ Map older structures into this chain when needed:
 
 Use the canonical taxonomy in `references/taxonomy.md`. Prefer existing team labels over inventing new ones. If a comment is too vague, keep the original text and mark the uncertain level as `待人工判定`, `暂无法判断`, `NA`, or `未提供` as appropriate.
 
+For newly created workbook output, prefer readable display labels without slash-separated compounds when a concise equivalent exists. For example prefer `质量故障` over `质量/故障`, `音质体验` over `音质/性能体验`.
+
 ## Output Structure
 
 Default outputs:
@@ -86,6 +87,7 @@ Default outputs:
 Follow `references/layout.md` for sheet ordering and table layout.
 
 When the source sample is large enough to benefit from visual scanning, generate restrained charts directly inside the Excel workbook. Prefer low-color line charts and keep data tables as the primary evidence surface.
+For return datasets with a usable `退货时间` field, prefer a single minimalist time-trend line chart below the summary text. Use month as the default grain and switch to day only when the window is short or the user asks.
 
 ## Summary Writing Rules
 
@@ -94,10 +96,12 @@ Generate summary text in Chinese.
 Always include:
 
 - Total records and valid feedback count
+- For return analysis, explicitly note how many blank or no-comment rows were excluded from valid feedback statistics
 - Top 3 categories with percentages
 - A short overall diagnosis
 - A visible “how the analysis converged” path from big class to small class to macro theme
 - Numbered key issues
+- Peak month or peak day when a trend chart is present
 - Risk emphasis for fault, compatibility, power, silence, protection, or noise issues
 - Reasonable demand emphasis when the user is asking for missing but valid features
 - Rich-text emphasis in Excel: one-line summary bold, key words red, punctuation left uncolored

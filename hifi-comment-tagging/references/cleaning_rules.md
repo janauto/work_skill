@@ -20,9 +20,14 @@ Choose analysis text in this order:
 
 Write the chosen value to `cleaned_comment`.
 
+For return workbooks, apply one extra rule:
+
+- If a buyer free-text field such as `买家备注` or its translation exists, use free text as the valid-feedback basis.
+- Keep `退货原因` for audit and later analysis joins, but do not treat a reason-code-only row as valid user feedback.
+
 ## 3. Invalid Feedback
 
-Mark rows invalid or drop them when the chosen text is (unless `--keep-blank` is specified to keep them):
+Mark rows invalid or drop them when the chosen text is:
 
 - Empty
 - `NA`
@@ -31,6 +36,7 @@ Mark rows invalid or drop them when the chosen text is (unless `--keep-blank` is
 - `same as above`
 - Pure punctuation
 - A formatting artifact with no problem statement
+- For return analysis with buyer free-text fields: a blank buyer remark combined with only a standardized platform return reason
 
 If a row has no comment text but already has strong manual labels, keep it only when the user explicitly wants historical labeled data preserved.
 
@@ -55,6 +61,7 @@ Always preserve:
 - Sheet name
 - Source row number
 - Original text fields
+- Time fields such as `退货时间` when available, so the summary workbook can build trend charts
 
 ## 6. Existing Labels
 

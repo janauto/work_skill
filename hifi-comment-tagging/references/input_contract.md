@@ -91,6 +91,7 @@ When the skill produces structured output, normalize fields to:
 - `source_type`
 - `source_sheet`
 - `source_row`
+- `return_time`
 - `store`
 - `country`
 - `raw_comment`

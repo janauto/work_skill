@@ -98,16 +98,18 @@ Apply Excel rich-text formatting:
 - The one-line summary sentence should be bold
 - Key terms and key percentages should be red
 - Do not color punctuation marks
+- Highlight only the words or numbers themselves; do not wrap the surrounding punctuation into the red segment
 
 ### Lower chart area
 
-When valid sample size is at least 20 rows, reserve space below the text summary for simple charts.
+When valid sample size is at least 20 rows and a usable date field exists, reserve space below the text summary for one simple trend chart.
 
 Preferred chart types:
 
-- Line chart for Top category share
-- Optional second line chart for converged macro-theme share
-- Keep the underlying data table visible next to the chart
+- One minimalist line chart for valid-feedback trend over time
+- Default to month trend; switch to day trend only when the source window is short or the user explicitly asks
+- Keep the underlying data table visible next to or below the chart
+- Do not stack multiple analytical charts by default
 
 ## Style Cues
 
@@ -121,6 +123,7 @@ Use style cues from current house files:
 - Percentages: 4 decimal places in data tables, 2 decimal places in prose
 - Percentage text in tables should be red
 - Charts: low-color, mostly blue/gray lines, keep titles short
+- Prefer a single blue line with simple markers, no legend, and no unnecessary decorative elements
 - Keep text neat and uniform: same font family, same readable font size, centered headers, top-aligned wrapped body text
 
 ## Representative Comment Rule
@@ -150,4 +153,5 @@ The final summary should keep full narrative wording and should not be compresse
 - Do not flatten everything into one raw pivot table
 - Do not hide the convergence logic from big class to small class to macro theme
 - Do not use pie charts or high-saturation charts as the default
+- Do not use “核心类别占比走势” and “收敛大类占比走势” as the default return-analysis charts when a time trend is available
 - Do not introduce a brand-new column order unless the user gave a fixed template

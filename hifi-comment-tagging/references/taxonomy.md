@@ -11,6 +11,19 @@ Use this file as the default label system for HIFI comment analysis.
 
 If the source workbook only has 2 or 3 levels, map what exists and leave the missing levels empty or `NA`.
 
+## Display Naming Rule
+
+When creating new output labels in generated workbooks, prefer concise slash-free display names when the meaning stays unchanged.
+
+Examples:
+
+- prefer `质量故障` over `质量/故障`
+- prefer `音质体验` over `音质/性能体验`
+- prefer `兼容连接` over `兼容性/连接问题`
+- prefer `价格竞品` over `价格/替代品/竞品`
+
+Keep the underlying category meaning aligned with the canonical taxonomy even when the display form is shortened.
+
 ## Priority Rules
 
 Tag by the dominant actionable issue, not by every phrase in the sentence.
