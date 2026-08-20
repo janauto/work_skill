@@ -1,6 +1,6 @@
 # Work Skill
 
-这是一个面向产品研究、用户评论分析、竞品评论抓取和结构化洞察输出的 Codex Skill 工作集。仓库当前包含 4 个主要技能包，覆盖从外部评论采集、Excel 清洗、中文标签体系归因，到产品定义 VOC 总结的完整链路。
+这是一个面向产品研究、用户评论分析、竞品评论抓取、硬件DVT评审和结构化洞察输出的 Codex Skill 工作集。技能包覆盖外部评论采集、Excel 清洗、中文标签体系归因、产品定义 VOC，以及硬件整机透视爆炸图和局部工程改型展示。
 
 ## 仓库定位
 
@@ -40,6 +40,12 @@
 ├── hifi-comment-tagging/
 │   ├── SKILL.md
 │   ├── README.md
+│   ├── references/
+│   └── scripts/
+├── dvt-exploded-model-visualizer/
+│   ├── SKILL.md
+│   ├── agents/
+│   ├── assets/
 │   ├── references/
 │   └── scripts/
 ├── product-definition-voc/
@@ -287,6 +293,33 @@ python3 scripts/build_voc_summary_workbook.py tagged.xlsx --output voc_summary.x
 - 不同功能和场景下的情绪热区。
 - 可转化为产品定义的机会提示。
 
+### 5. DVT Exploded Model Visualizer
+
+路径：`dvt-exploded-model-visualizer/`
+
+用于从 STEP/STP/GLB 整机模型生成可交互的透视爆炸图，并在不混淆原始CAD和方案概念件的前提下，展示DVT局部结构修改。适合结构评审、装配说明、改模沟通、光学/电子模组堆叠和验证计划。
+
+核心能力：
+
+- 输入文件扫描，识别STEP/STP、GLB/GLTF、2D图、BOM、需求文档和占位文件。
+- 生成爆炸距离、透视、标准视图、模块显隐和点选查看等交互。
+- 将源CAD、`PROPOSED DVT`和`CONCEPT ONLY`分开标识，避免把概念叠加件写成已冻结CAD。
+- 使用实际可制造截面展示平板环、导光件、遮光支架、FPC尾线、安装耳、螺钉柱和紧固方向。
+- 在HTML中加入“开始前请放入这些文件”提醒、BOM、装配步骤、工艺步骤和DVT检验关卡。
+- 使用真实浏览器回归验证模型加载、交互、桌面/移动布局及控制台错误。
+
+输入文件扫描示例：
+
+```bash
+python3 dvt-exploded-model-visualizer/scripts/inspect_model_bundle.py /abs/path/to/project
+```
+
+主要输出：
+
+- 可交互HTML透视爆炸图。
+- 派生GLB/元数据和组装/爆炸预览图。
+- 局部修改方案、制造工艺、装配顺序、验证要求和待补文件清单。
+
 ## 快速选择指南
 
 | 需求 | 推荐技能包 |
@@ -296,6 +329,7 @@ python3 scripts/build_voc_summary_workbook.py tagged.xlsx --output voc_summary.x
 | 抓 ASR 论坛帖子并做音频用户讨论表 | `asr-review-scraping-skill` |
 | 分析单个 HIFI 产品的评论、退货、售后问题 | `hifi-comment-tagging` |
 | 从评论中提炼产品定义、隐藏需求和 Aha moment | `product-definition-voc` |
+| 从整机CAD生成透视爆炸图，并展示DVT局部改型 | `dvt-exploded-model-visualizer` |
 | 只抓普通 JS 页面 | `playwright-simple.js` |
 | 抓 Cloudflare 或 403 页面 | `playwright-stealth.js` |
 

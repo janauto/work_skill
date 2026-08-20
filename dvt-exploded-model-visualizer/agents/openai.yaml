@@ -1,0 +1,4 @@
+interface:
+  display_name: "DVT三维爆炸图与局部改型"
+  short_description: "生成透视爆炸图，并展示可制造的局部结构变更"
+  default_prompt: "Use $dvt-exploded-model-visualizer to inspect my hardware CAD inputs, generate an interactive exploded-view HTML, and clearly label local DVT modifications."
