@@ -1,0 +1,4 @@
+interface:
+  display_name: "专利附图 DWG 实线清理"
+  short_description: "去附图标记编号、统一实线并生成已审计 DWG"
+  default_prompt: "Use $patent-drawing-dwg-cleanup to clean these patent figures into continuous-line DXF/DWG files, preserve functional labels, and validate the DWG in AutoCAD."

@@ -1,6 +1,6 @@
 # Work Skill
 
-这是一个面向产品研究、用户评论分析、竞品评论抓取、硬件DVT评审和结构化洞察输出的 Codex Skill 工作集。技能包覆盖外部评论采集、Excel 清洗、中文标签体系归因、产品定义 VOC，以及硬件整机透视爆炸图和局部工程改型展示。
+这是一个面向产品研究、用户评论分析、竞品评论抓取、硬件DVT评审、专利附图CAD处理和结构化洞察输出的 Codex Skill 工作集。技能包覆盖外部评论采集、Excel 清洗、中文标签体系归因、产品定义 VOC、硬件整机透视爆炸图，以及专利框线图的实线化、去附图标记编号与DWG验证。
 
 ## 仓库定位
 
@@ -46,6 +46,11 @@
 │   ├── SKILL.md
 │   ├── agents/
 │   ├── assets/
+│   ├── references/
+│   └── scripts/
+├── patent-drawing-dwg-cleanup/
+│   ├── SKILL.md
+│   ├── agents/
 │   ├── references/
 │   └── scripts/
 ├── product-definition-voc/
@@ -320,6 +325,36 @@ python3 dvt-exploded-model-visualizer/scripts/inspect_model_bundle.py /abs/path/
 - 派生GLB/元数据和组装/爆炸预览图。
 - 局部修改方案、制造工艺、装配顺序、验证要求和待补文件清单。
 
+### 6. Patent Drawing DWG Cleanup
+
+路径：`patent-drawing-dwg-cleanup/`
+
+用于把DWG、DXF、Matplotlib、PDF或位图来源的专利框线图整理成连续实线CAD，移除专利附图标记编号，同时保留轴号、端子名、电压、尺寸等功能标注，并使用AutoCAD原生核心引擎生成和审计DWG。
+
+核心能力：
+
+- 在删除前盘点数字文本，区分专利引用编号与`A1`、`24V`、尺寸、公差等有效工程信息。
+- 将实体和图层线型统一为`CONTINUOUS`，避免只在预览中看似实线。
+- 支持从Matplotlib artist导出LINE、POLYLINE、CIRCLE、箭头和文字。
+- 通过ASCII临时保存路径规避AutoCAD macOS命令脚本对中文输出路径的乱码问题。
+- 使用AutoCAD Core Console两次`AUDIT`，并检查实体数和非实线对象数。
+- 同时交付可编辑文字DXF与可选的字体无关矢量文字DWG。
+
+典型流程：
+
+```bash
+python3 patent-drawing-dwg-cleanup/scripts/clean_patent_dxf.py \
+  input.dxf cleaned.dxf \
+  --reference-number 100 \
+  --reference-number 310 \
+  --report cleanup-report.json
+
+python3 patent-drawing-dwg-cleanup/scripts/validate_clean_dxf.py cleaned.dxf
+
+python3 patent-drawing-dwg-cleanup/scripts/autocad_core_dxf_to_dwg.py \
+  cleaned.dxf cleaned.dwg
+```
+
 ## 快速选择指南
 
 | 需求 | 推荐技能包 |
@@ -330,6 +365,7 @@ python3 dvt-exploded-model-visualizer/scripts/inspect_model_bundle.py /abs/path/
 | 分析单个 HIFI 产品的评论、退货、售后问题 | `hifi-comment-tagging` |
 | 从评论中提炼产品定义、隐藏需求和 Aha moment | `product-definition-voc` |
 | 从整机CAD生成透视爆炸图，并展示DVT局部改型 | `dvt-exploded-model-visualizer` |
+| 把专利框线图转为实线、去附图编号并生成已审计DWG | `patent-drawing-dwg-cleanup` |
 | 只抓普通 JS 页面 | `playwright-simple.js` |
 | 抓 Cloudflare 或 403 页面 | `playwright-stealth.js` |
 
@@ -346,7 +382,7 @@ python3 dvt-exploded-model-visualizer/scripts/inspect_model_bundle.py /abs/path/
 常用 Python 依赖：
 
 ```bash
-python3 -m pip install openpyxl pillow requests
+python3 -m pip install openpyxl pillow requests ezdxf
 ```
 
 ASR 额外依赖：
@@ -387,6 +423,7 @@ npx playwright install chromium
 - ASR 图片提取依赖本地 Chrome 缓存；运行前最好先用 Chrome 打开相关图片或线程。
 - 对多产品、多品类 Excel，不要默认混合分析，应先明确目标产品或分析范围。
 - 自动标签只是初筛，关键结论需要人工复核。
+- 清理专利附图编号时应先审核数字候选，不要把电压、尺寸、公差或功能轴号当作引用编号批量删除。
 - 评论和图片数据可能涉及平台规则、账号权限和隐私边界，使用时应遵守目标网站条款和内部数据合规要求。
 
 ## 推荐工作流
