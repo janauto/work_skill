@@ -8,10 +8,15 @@ Work in a new output directory. Inventory DWG, DXF, SVG, PDF, PNG/JPG, figure-ge
 
 Choose the highest-quality geometry authority in this order:
 
-1. Controlled DWG/DXF or other vector CAD.
-2. SVG/PDF vector paths.
-3. Figure-generation source such as Matplotlib.
-4. Raster image, which requires tracing or reconstruction.
+1. 3D CAD assembly (STEP/STP/IGES) — compute the view with analytic hidden-line removal.
+   See [cad-source-to-drawing.md](cad-source-to-drawing.md).
+2. Controlled DWG/DXF or other vector CAD.
+3. SVG/PDF vector paths.
+4. Figure-generation source such as Matplotlib.
+5. Raster image, which requires tracing or reconstruction.
+
+When a 3D model exists, prefer it even if a 2D drawing is also available: the model carries the
+real geometry, and views, sections, and exploded states can be regenerated instead of redrawn.
 
 When only a raster exists, preserve proportions but do not invent real-world dimensions. State that the result is a diagrammatic redraw unless dimensions are independently known.
 
@@ -69,6 +74,14 @@ Recommended deliverables:
 - One preview PNG per figure.
 - A cleanup report listing removed and preserved numeric labels.
 
+## 5b. Sheet conventions for Chinese mechanical drawings
+
+Chinese text in FangSong (`simfang.ttf`; GB/T 14691 specifies 长仿宋体), numerals and Latin in the
+AutoCAD stick font (`txt.shx`). Leaders are an angled line from the part plus a short horizontal
+landing with the numeral sitting on the landing, not a dot with a floating number. A part table sits
+at the lower left as `NO. | NAME | QTY | REMARK`, the remark carrying the fixing or fit method.
+Write font *names* into the DXF style, not absolute paths.
+
 ## 6. Convert with AutoCAD Core Console on macOS
 
 The common AutoCAD 2026 executable is:
@@ -89,6 +102,9 @@ Structural DXF checks:
 - Non-continuous entity count is zero.
 - Rejected reference candidates are zero after applying the approved allowlist.
 - Entity count is nonzero.
+
+Without AutoCAD, use `scripts/libredwg_dxf_to_dwg.py` and treat a clean `dwgread` re-parse as the
+AUDIT equivalent. State which engine was used.
 
 AutoCAD DWG checks:
 

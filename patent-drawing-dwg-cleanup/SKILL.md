@@ -1,6 +1,6 @@
 ---
 name: patent-drawing-dwg-cleanup
-description: Rebuild or clean patent figures as editable DXF/DWG, convert dashed geometry to continuous lines, remove patent reference numerals without deleting functional labels, and validate the result with AutoCAD. Use for patent line drawings sourced from DWG, DXF, Matplotlib, PDF, or raster images.
+description: Generate or clean patent figures as editable DXF/DWG, convert dashed geometry to continuous lines, remove patent reference numerals without deleting functional labels, and validate the result. Use for patent line drawings sourced from a 3D CAD assembly (STEP), DWG, DXF, Matplotlib, PDF, or raster images.
 ---
 
 # Patent Drawing DWG Cleanup
@@ -9,6 +9,9 @@ Produce a clean, editable CAD deliverable while preserving the source files. The
 
 ## Route by source type
 
+- 3D CAD assembly (STEP/STP/IGES): this is the highest-fidelity source. Compute the figure with
+  analytic hidden-line removal instead of tracing anything, using `scripts/cad_hlr_to_dxf.py`.
+  Read [references/cad-source-to-drawing.md](references/cad-source-to-drawing.md) before the first run.
 - Existing DXF: inspect the text candidates, clean a copy with `scripts/clean_patent_dxf.py`, then validate it with `scripts/validate_clean_dxf.py`.
 - Existing DWG: open or convert a copy to DXF with AutoCAD first. Do not treat a compressed DWG as a text-editable file or rewrite it with `ezdxf`.
 - Matplotlib or other vector source: preserve the source geometry and export its artists or paths to DXF. Read [references/workflow.md](references/workflow.md) for the artist-to-CAD mapping.
@@ -38,7 +41,7 @@ Set graphical entities to `CONTINUOUS` and set their layers to `CONTINUOUS`; che
 
 Generate a preview image after cleaning and compare it with the source. The preview must show that no outline, arrowhead, junction, or retained label was lost.
 
-## Create the DWG with AutoCAD
+## Create the DWG
 
 Prefer Autodesk's own core engine over third-party DWG converters when AutoCAD is installed. The bundled converter writes to an ASCII temporary path so Chinese output paths do not get corrupted by the command-script prompt:
 
@@ -47,6 +50,17 @@ python3 scripts/autocad_core_dxf_to_dwg.py cleaned.dxf cleaned.dwg
 ```
 
 The converter runs `AUDIT`, saves as AutoCAD 2018 DWG, re-audits, and reports entity and non-continuous counts. Pass `--autocad-core` if AutoCAD is installed in a nonstandard location.
+
+When AutoCAD is not installed, fall back to LibreDWG:
+
+```bash
+python3 scripts/libredwg_dxf_to_dwg.py cleaned.dxf -o dwg/ --deep-audit --report dwg-report.json
+```
+
+It writes R2000 and uses `dwgread` in place of the AUDIT round trip: a file that re-parses cleanly
+with a non-zero entity count and intact text passes. Say in the handoff which engine produced the DWG.
+LibreDWG does not scale to very large combined sheets; convert per figure and deliver an oversized
+combined sheet as DXF rather than reporting a DWG that never completed.
 
 If retained Chinese text is substituted or garbled, keep the editable-text DXF and create a second DWG in which the text is converted to vector outlines before conversion. Label that tradeoff clearly: outlined text is portable but no longer editable as text.
 
