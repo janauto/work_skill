@@ -105,6 +105,8 @@ def main() -> int:
 
     approved = load_approved(args)
     inline_re = selected_pattern(approved)
+    if not source.is_file():
+        raise SystemExit(f"Input DXF not found: {source}")
     doc = ezdxf.readfile(source)
     removed: list[dict[str, str]] = []
     changed: list[dict[str, str]] = []

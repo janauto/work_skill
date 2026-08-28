@@ -27,6 +27,8 @@ def main() -> int:
     args = parse_args()
     source = args.input.expanduser().resolve()
     allowed = {str(value) for value in args.allow_number}
+    if not source.is_file():
+        raise SystemExit(f"Input DXF not found: {source}")
     doc = ezdxf.readfile(source)
     suspect_text = []
     text_count = 0

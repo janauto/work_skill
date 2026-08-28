@@ -34,6 +34,8 @@ def require(tool: str) -> None:
 
 
 def convert(src: Path, dst: Path) -> tuple[bool, str]:
+    if not src.is_file():
+        return False, f"Input DXF not found: {src}"
     dst.parent.mkdir(parents=True, exist_ok=True)
     code, out = run(["dwgwrite", "--as", "r2000", "-o", str(dst), str(src)])
     return ("SUCCESS" in out and dst.exists()), out
@@ -84,11 +86,15 @@ def main() -> int:
         ok, log = convert(src, dst)
         row = {"dxf": str(src), "dwg": str(dst), "converted": ok}
         row["audit"] = audit(dst, args.deep_audit) if ok else None
+        row["log"] = None if ok else log.strip()[-300:]
         if not ok or not row["audit"] or not row["audit"]["ok"]:
             failed += 1
         rows.append(row)
-        print(f"{src.name} -> {dst.name}  converted={ok}"
-              + (f"  audit_ok={row['audit']['ok']}" if row["audit"] else ""))
+        if not ok:
+            print(f"{src.name} -> {dst.name}  converted=False  {log.strip().splitlines()[-1] if log.strip() else ''}")
+        else:
+            print(f"{src.name} -> {dst.name}  converted=True"
+                  + (f"  audit_ok={row['audit']['ok']}" if row["audit"] else ""))
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(rows, ensure_ascii=False, indent=2),

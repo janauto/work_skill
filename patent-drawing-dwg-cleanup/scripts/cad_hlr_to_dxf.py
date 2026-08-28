@@ -351,7 +351,8 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("step", type=Path)
-    p.add_argument("output", type=Path)
+    p.add_argument("output", type=Path, nargs="?",
+                   help="omit when using --list-parts")
     p.add_argument("--view", default="iso", choices=sorted(VIEWS))
     p.add_argument("--az", type=float)
     p.add_argument("--el", type=float)
@@ -377,8 +378,17 @@ def main() -> int:
     args = parse_args()
     parts = load_step(args.step)
     if args.list_parts:
-        for p in sorted({(x.name, tuple(np.round(x.hi - x.lo, 1))) for x in parts}):
-            print(f"{p[0]:<40} {p[1]}")
+        # inspection mode: no output file needed
+        seen: dict[str, tuple] = {}
+        counts: dict[str, int] = {}
+        for x in parts:
+            counts[x.name] = counts.get(x.name, 0) + 1
+            seen.setdefault(x.name, tuple(round(float(v), 1) for v in (x.hi - x.lo)))
+        print(f"{'PART':<40}{'QTY':>5}   SIZE X x Y x Z (mm)")
+        for name in sorted(seen):
+            w, d, h = seen[name]
+            print(f"{name:<40}{counts[name]:>5}   {w} x {d} x {h}")
+        print(f"\n{len(parts)} instance(s), {len(seen)} distinct part(s)")
         return 0
     if args.include:
         parts = [p for p in parts
@@ -413,6 +423,8 @@ def main() -> int:
             seen[p.name] = seen.get(p.name, 0) + 1
         rows = [(i + 1, name, qty, "") for i, (name, qty) in enumerate(sorted(seen.items()))]
 
+    if args.output is None:
+        raise SystemExit("an output .dxf path is required unless --list-parts is used")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     write_dxf(args.output, visible, hidden, caption=args.caption, rows=rows,
               note=args.note, fmt=args.dxf_version)
