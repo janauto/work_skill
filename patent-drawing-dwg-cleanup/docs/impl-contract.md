@@ -1878,7 +1878,7 @@ confidential, but they are working notes, not deliverables).
 | CodeBuddy | Kimi-K2.5 (月之暗面) | 22 KB |
 | CodeBuddy | DeepSeek-V3.2 | 26 KB |
 | CodeBuddy | MiniMax-M2.7 | 27 KB |
-| Codex CLI | GPT-5.x | (see run log) |
+| Codex CLI | GPT-5.x | **did not return** — hung at 0% CPU with no output after 4h25m and was killed |
 
 **Acceptance rule: a finding counted only if ≥2 models raised it independently, or if one model
 raised it and it was reproduced against the actual library.** Every library claim below was
@@ -1902,6 +1902,11 @@ re-verified locally rather than taken on trust — one of them turned out to be 
 | `$INSUNITS` defaults to 6 (metres), not absent | 1/4 | `6` | `write_figure` must set 4, §5.4 |
 | `list[int]` works at runtime on Python 3.9 | 1/4 | yes | §1 relaxed |
 | **`jsonschema` is not installed** | 1/4 | **false — 4.25.1 is installed** | rejected |
+
+Codex produced nothing. It was launched against the contract as it stood before the algorithm
+section landed, ran for four and a half hours, and sat at 0% CPU with an empty output buffer until
+it was killed. Its findings are simply absent from the table above; four models is what this audit
+actually rests on, not five.
 
 The last row is the reason for the verify-locally rule. A single model's confident factual claim
 about the environment was simply wrong; had it been actioned, the plan validator would have been
