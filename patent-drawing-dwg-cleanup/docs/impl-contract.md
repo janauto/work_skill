@@ -1843,8 +1843,12 @@ def place_labels(requests, *, obstacles, text_height, sheet_lo, sheet_hi):
 6. **新增** `leader_hits_numeral_box_max = 0`：任一 `LEADER` 折线段不得与任一 `NUM` 文字的
    外接框相交（§5.3 明文把已提交的数字框列为 obstacles，§11.7 的 `_dyn_ok` 已构造性保证）。
 
-**对 `plan.py`（§5.6）的修订要求**：`apply_defaults` 里 `axis_angle` 的默认值改为
-`AXIS_ANGLE_DEFAULT = 124`（裁决 D4）；夹紧区间 `[120,180]` 与 `W_CLAMPED` 不变。
+**对 `plan.py`（§5.6）的修订要求**：~~`apply_defaults` 里 `axis_angle` 的默认值改为
+`AXIS_ANGLE_DEFAULT = 124`（裁决 D4）~~ —— **已被 §4.2 的架构裁决取代：默认值是字符串
+`"auto"`，由 renderer 逐图闭式求解 `axis_angle_opt`。** 理由见 §4.2：最优角依赖串的长宽比，
+是图的属性而不是常数，把它固定成任何数字都等于让模型抄一个脚本已经算出来的版面常数。
+`AXIS_ANGLE_DEFAULT = 124` 仍保留在 §11.2 常数表中，但只作为闭式解无解时的兜底起点。
+夹紧区间 `[120,180]` 与 `W_CLAMPED` 对显式数值仍然不变。
 
 **待核对项（写进 `open_issues`，不阻塞实现）**：`TEXT_FLOOR_MM = 3.5` 的规范依据为
 GB/T 14691 字号系列 + CNIPA 对附图缩小后清晰度的要求，落地前需按 `iteration-plan-v2.md` §7.5
@@ -1879,7 +1883,7 @@ re-verified locally rather than taken on trust — one of them turned out to be 
 | `load_assembly` sort-key rounding precision unspecified | 4/4 | yes | fixed at `round(v, 6)`, §5.1 |
 | `normalized_digest` sort key and rounding under-specified | 4/4 | yes | full recipe written out, §5.4 |
 | zero-overlap postconditions unsatisfiable on dense input | 4/4 | mathematically | escape hatch made explicit, §5.2/5.3 |
-| `fit_to_frame` target occupancy undefined | 3/4 | yes | `TARGET_OCCUPANCY = 0.62` + formula, §5.2 |
+| `fit_to_frame` target occupancy undefined | 3/4 | yes | ~~`TARGET_OCCUPANCY = 0.62`~~ — **superseded by §11.10 #1**: the area target was abolished entirely. `geometry_occupancy` is scale-invariant, so capping the scale could not improve it and only pushed text height 21% down through the 3.5 mm floor. Page filling is now the separate `sheet_fill` gate. |
 | `np.argsort` default is not stable | 3/4 | `quicksort` | §7 rule 5 strengthened |
 | `roll_for_axis` algorithm unspecified, legacy compares raw floats | 3/4 | yes | closed form specified, §5.1 |
 | `DENSITY` values have no stated semantics | 3/4 | yes | defined against median part extent, §5.2 |
