@@ -1,0 +1,9 @@
+# tests/fixtures/golden_digest.txt
+# sheet.normalized_digest (impl-contract §5.4) of the figures rendered from
+# tests/fixtures/synthetic.stp by the plan in tests/test_golden.py.
+# Regenerate with:  python3 tests/test_golden.py --update
+# A changed digest means the DRAWING changed — read the diff, do not just paste it.
+# recorded on cadquery-ocp 7.7.2, ezdxf 1.4.2, numpy 2.0.2, python 3.9
+
+fig1.dxf  a39a028faf7049fc1f5beeba5281b8f4c39673664891acdffc036f7778d13722
+fig2.dxf  f79d9f939fcbcc687d8256a2e729759843b4047a7f60e2bc66f0061833c8cc1e

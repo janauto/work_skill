@@ -321,7 +321,9 @@ def layout_exploded(pieces: list[Piece], axis2d: np.ndarray, density: str,
     to a single row either — then a caller that passes the argument and one that forgets it would
     render two different figures and both would pass QA."""
 
-FRAME_W, FRAME_H = 180.0, 250.0   # A4 portrait minus a 15 mm margin, in millimetres
+FRAME_W, FRAME_H = 170.0, 250.0   # millimetres. 170 = 210 - 25 - 15 (CNIPA margins, 审查指南
+                                  # 五部一章 4.3: top 25 / left 25 / right 15 / bottom 15 on A4).
+                                  # 180 was unplaceable: 25 + 180 + 15 = 220 > 210.
 
 def fit_to_frame(result: LayoutResult, frame_w: float = FRAME_W, frame_h: float = FRAME_H,
                  margin: float = 0.0) -> float
@@ -694,7 +696,12 @@ DXF 以毫米写出（`$INSUNITS=4`，§5.4 强制），`h` 可从 `NUM` 图层�
 
 #### 11.1.2 一维串在什么条件下够用——把账算完
 
-图幅：`FRAME_W×FRAME_H = 180×250 mm`（A4 竖版减 15 mm 边距，§5.2 冻结）。
+图幅：`FRAME_W×FRAME_H = 170×250 mm`。**注意本节的实测表是按 180 宽算的**，
+因为定稿当时 §5.2 冻结的是 180；后续核实《审查指南》五部一章 4.3 的页边要求
+（A4 顶 25 / 左 25 / 右 15 / 底 15）后，合规可用宽只有 `210-25-15=170`，
+180 在几何上无法合规摆放（`25+180+15=220 > 210`），已改为 170。
+宽度收窄 5.6% 会让本节表里的 `sheet_fill` 与最优角略有变化，**结论方向不变**
+（一维串在 N≤20 下够用、最优角由闭式解逐图求），但表中的具体数字应以实跑的 qa 为准。
 扣掉标记边槽与图题带后的可用区 `aw×ah` 见 §11.2 的 `label_margin_mm/caption_band_mm`。
 零件沿轴足迹 `w_i`，间隙 `G = DENSITY[density] * median(w)`（§5.2 冻结语义），
 串沿轴总长 `L = Σw_i + (n-1)G`，垂轴宽 `V`。图面轴对齐包围盒：

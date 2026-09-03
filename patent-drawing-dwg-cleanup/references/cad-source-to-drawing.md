@@ -67,16 +67,52 @@ is occluded correctly. Put hatch lines on their own layer at a lighter lineweigh
 
 ## 6. Sheet conventions
 
-Match what Chinese mechanical drawings actually use, which is what a reviewer
-will compare against:
+> **A patent figure is not an engineering assembly drawing.** These are two
+> different sheets with two different rule sets, and mixing them is how v1
+> failed: a GB-style parts table carrying internal part codes was drawn onto a
+> filing figure. That table violates three separate CNIPA requirements at once —
+> 除必需的词语外不得含有其他注释, 附图周围不得有与图无关的框线, and the rule that a
+> parts list belongs in the 说明书·附图说明 section rather than on the drawing.
+> Read [patent-figure-spec.md](patent-figure-spec.md) A5 / A10 / A20 before you
+> put any text on a sheet. **Default to the patent sheet. The engineering sheet
+> is opt-in, for internal review only, and never leaves the building as a filing
+> copy.**
+
+### 6.1 Patent figure (the default)
+
+Everything on this sheet is geometry, leaders, reference numerals, and the
+figure caption. Nothing else.
 
 | Element | Convention |
 | --- | --- |
-| Chinese text | FangSong (`simfang.ttf`). GB/T 14691 specifies 长仿宋体 |
+| Chinese text | Caption only. FangSong (`simfang.ttf`); the CNIPA guideline allows 宋体/仿宋体/楷体, and GB/T 14691 specifies 长仿宋体 for drawings |
 | Numerals and Latin | AutoCAD stick font (`txt.shx`), or a plain sans when outlining |
-| Leader | angled line from the part, then a short horizontal landing, numeral sitting on the landing |
-| Part table | `NO. | NAME | QTY | REMARK`, lower left, remark carries the fixing method |
-| Layers | geometry, hatch, leader, numeral, table, caption, note — all `CONTINUOUS` |
+| Reference numerals | Arabic numerals only, issued from `terms[]` order — never a part name, code, or quantity |
+| Leader | angled line from the part, then a short horizontal landing, numeral sitting just beyond the landing end |
+| Caption | figure number plus figure name, centred directly below the drawing |
+| Part table | **none.** The part-name list goes into the 说明书·附图说明 text, delivered as `reference-numerals.json` → `description_zh` |
+| Title block, frame, scale, units, signatures, dates, company name | **none** |
+| Dimensions, tolerances, surface finish, weld symbols | **none** |
+| Layers | `GEOM`, `HIDDEN`, `LEADER`, `NUM`, `CAPTION`, `NOTE` — all `CONTINUOUS` (`TABLE` stays empty) |
+
+### 6.2 Engineering assembly sheet (`layout.engineering_table: true` — internal review only)
+
+This is the GB mechanical-drawing convention. It exists so a mechanical reviewer
+can check part identity against the model. It is **off by default**, and a file
+produced with it is written as `<figure id>_engineering.dxf` so a review copy can
+never be mistaken for a filing copy.
+
+| Element | Convention |
+| --- | --- |
+| Part table | `NO. | NAME | QTY | REMARK`, lower left, remark carries the fixing method — on the `TABLE` layer |
+| Everything else | as in 6.1 |
+
+Enabling it is an explicit plan edit (`layout.engineering_table: true`, see
+`docs/impl-contract.md` §4.2 and §8), not a CLI convenience. Never ship the
+`_engineering.dxf` to a patent agent, and say plainly in the handoff which file
+is which.
+
+### 6.3 Fonts
 
 Write the DXF style with the CAD-portable font *name* (`simfang.ttf`,
 `txt.shx`) rather than an absolute path, so the receiving machine resolves it.

@@ -1,0 +1,19 @@
+# v2 专利附图工具链的锁定依赖。
+# 版本逐位取自 docs/impl-contract.md §1 的表格；scripts/doctor.py 的 PINNED 表是同一份数据，
+# 改契约表时两处必须同步（doctor 会把不一致报成 wrong-version）。
+#
+# Python: >= 3.9（开发机 3.9.6）。代码按 3.9 编写：不用 match，不用运行期的 X | Y 注解，
+# 每个模块顶部加 from __future__ import annotations。
+#
+# 安装： python3 -m pip install -r requirements-pinned.txt
+# 自检： python3 scripts/doctor.py --json
+#
+# cadquery-ocp 提供 OCP.* 命名空间（pip 可装）。不要换成 conda-only 的 pythonocc-core（OCC.Core），
+# 两者 API 不通用，contract §1 明文禁止。
+
+cadquery-ocp==7.7.2
+ezdxf==1.4.2
+numpy==2.0.2
+jsonschema==4.25.1
+matplotlib==3.9.4
+pytest==8.4.2

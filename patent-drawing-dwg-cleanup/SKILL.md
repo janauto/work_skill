@@ -1,23 +1,228 @@
 ---
 name: patent-drawing-dwg-cleanup
-description: Generate or clean patent figures as editable DXF/DWG, convert dashed geometry to continuous lines, remove patent reference numerals without deleting functional labels, and validate the result. Use for patent line drawings sourced from a 3D CAD assembly (STEP), DWG, DXF, Matplotlib, PDF, or raster images.
+description: Generate patent figures from a 3D CAD assembly (STEP) by writing one figure-plan.json that scripts render deterministically into assembly and exploded DXF sheets with leaders and reference numerals, and clean or convert existing patent line drawings (DWG, DXF, Matplotlib, PDF, raster) into continuous-line DXF plus an AutoCAD-audited DWG with reference numerals removed and functional labels preserved.
 ---
 
 # Patent Drawing DWG Cleanup
 
-Produce a clean, editable CAD deliverable while preserving the source files. The expected result is continuous-line geometry, no patent reference numerals requested for removal, retained functional labels, and an AutoCAD-audited DWG plus an editable DXF.
+Two routes. Pick one by input type and do not mix them.
 
-## Route by source type
+| Input | Route | Where the geometry comes from |
+| --- | --- | --- |
+| 3D CAD assembly — `.stp` / `.step` | **Route A**, below | computed by `scripts/patent_figure/*` from a plan you write |
+| Existing DXF | Route B | the source file, cleaned in place on a copy |
+| Existing DWG | Route B (convert to DXF first) | the source file |
+| Matplotlib or other vector | Route B | the source artists / paths |
+| PDF, PNG, JPG | Route B | extracted vector paths, or a traced reconstruction |
 
-- 3D CAD assembly (STEP/STP/IGES): this is the highest-fidelity source. Compute the figure with
-  analytic hidden-line removal instead of tracing anything, using `scripts/cad_hlr_to_dxf.py`.
-  Read [references/cad-source-to-drawing.md](references/cad-source-to-drawing.md) before the first run.
+`scripts/cad_hlr_to_dxf.py` remains the **legacy single-view** STEP route: one view, no per-part
+leaders, no numerals, no multi-figure split. Do not use it to produce a filing figure. Everything
+below in Route A supersedes it.
+
+---
+
+## Route A — 3D CAD assembly to patent figures
+
+**Your only output artefact is `figure-plan.json`.** No coordinate, text height, layout constant or
+numeral is ever written by you: the scripts compute all of them. The full specification is
+[docs/impl-contract.md](docs/impl-contract.md); rationale is
+[docs/iteration-plan-v2.md](docs/iteration-plan-v2.md). Read the contract before deviating from
+anything on this page — and then do not deviate, report instead (see *Prohibitions*).
+
+### The loop
+
+```
+doctor → analyze → write plan → validate → render (QA gate inside) → convert
+                        ↑                        │
+                        └──── on failure: edit the plan only ────┘
+```
+
+Run the commands exactly as written. Every CLI prints its contract under `--help`, writes
+machine-readable output with `--json`, and exits `0` pass / `1` failure / `2` usage error.
+
+**A0 — environment probe (first run in a session, always).**
+
+```bash
+python3 scripts/doctor.py --json
+```
+
+Exit `1` means a required capability is missing. Report what is missing and stop. Never work around
+a missing dependency by hand.
+
+**A1 — analyze the assembly.** This is the only place part names and geometry enter the workflow.
+
+```bash
+python3 scripts/analyze_assembly.py ASM.stp -o assembly.json --include 'SYN-*' --exclude '*SCREW*'
+```
+
+`--include` / `--exclude` are repeatable and **case-sensitive** (`fnmatchcase`), as is every glob in
+the system. Read `assembly.json` before writing the plan: `parts[]`, `stack_order`,
+`coaxial_groups`, `size_tiers`, `split_suggestions`, `warnings`. `split_suggestions` may legitimately
+be `[]` — then the grouping is yours to choose.
+
+**A2 — write `figure-plan.json`.** See the next section. This is the only file you author.
+
+**A3 — validate the plan.** Never skip it; it is cheaper than a failed render.
+
+```bash
+python3 scripts/validate_figure_plan.py plan.json --assembly assembly.json --json issues.json
+```
+
+**A4 — render.** The QA gate runs inside; a figure that fails it does not ship.
+
+```bash
+python3 scripts/render_patent_figure.py plan.json --assembly assembly.json -o out/ \
+        --cache .cache/ --preview
+```
+
+Writes `out/<figure id>.dxf`, `out/<figure id>.png` (with `--preview`), and
+`out/reference-numerals.json` (the global numeral table plus the ready-to-paste
+「附图标记说明：1—底座；2—…」 sentence). Exits `1` if any figure fails QA, printing the failing
+checks with their hints. `--only fig2` re-renders a single figure while iterating.
+
+**A5 — re-check one DXF (optional, same checks as the gate in A4).**
+
+```bash
+python3 scripts/qa_patent_figure.py out/fig1.dxf --kind exploded --json qa.json
+```
+
+**A6 — convert to DWG** with the frozen converters (identical to Route B; see *Create the DWG*).
+
+```bash
+python3 scripts/autocad_core_dxf_to_dwg.py out/fig1.dxf out/fig1.dwg
+```
+
+### The only file you write: `figure-plan.json`
+
+A complete minimal plan, valid against
+[schemas/figure-plan.schema.json](schemas/figure-plan.schema.json) and runnable against the
+synthetic fixture:
+
+```json
+{
+  "schema": "patent-figure-plan/1",
+  "source": {
+    "step": "tests/fixtures/synthetic.stp",
+    "include": ["SYN-*"],
+    "exclude": []
+  },
+  "terms": [
+    {"selector": "SYN-A01",  "term": "底座"},
+    {"selector": "SYN-B02",  "term": "回转座"},
+    {"selector": "SYN-C03",  "term": "支撑轴"},
+    {"selector": "SYN-D04",  "term": "密封圈"},
+    {"selector": "SYN-E05",  "term": "调整垫片", "label": "once"},
+    {"selector": "SYN-F06",  "term": "球头", "label": "all"},
+    {"selector": "SYN-G07",  "term": "上盖"},
+    {"selector": "SYN-H08*", "term": "紧固螺钉", "label": "none"}
+  ],
+  "figures": [
+    {"id": "fig1", "caption": "整体结构示意图", "kind": "assembly", "members": ["*"]},
+    {"id": "fig2", "caption": "回转组件分解示意图", "kind": "exploded",
+     "members": ["SYN-A01", "SYN-B02", "SYN-C03", "SYN-G07"],
+     "layout": {"explode_axis": "z"}}
+  ],
+  "layout": {
+    "view": "iso",
+    "explode_axis": "auto",
+    "axis_angle": "auto",
+    "density": "normal",
+    "max_labels_per_figure": 20,
+    "engineering_table": false
+  }
+}
+```
+
+Rules the validator enforces — read them as the contract, not as advice:
+
+- **`terms` carries Chinese technical nouns only, never numerals and never a part code.** The order
+  of `terms` *is* the numeral issue order: `terms[0]` becomes numeral 1. The script issues the
+  numbers; a numeral appearing anywhere in the plan is a defect, not a shortcut.
+- `terms[].selector` and `figures[].members` are case-sensitive globs on the part name and must each
+  match at least one part in `assembly.json` (`E_SELECTOR_NO_MATCH` / `E_MEMBER_NO_MATCH`).
+- `terms[].label` is `once` (default — exactly one instance carries the numeral), `all` (every
+  instance), or `none` (standard parts: no leader at all). This is the escape valve for repeated
+  hardware; use it before you consider splitting a figure.
+- `figures[].kind` is `assembly` or `exploded`. `figures[].id` is also the output file stem.
+- **`layout.axis_angle` stays `"auto"`.** The renderer solves the sheet angle per figure in closed
+  form; the optimal angle depends on that figure's length-to-width ratio, so it is not a constant.
+  Pin a number only when a reviewer asks for a specific look — and never by copying back a value the
+  renderer just printed at you. Same for `explode_axis`: `"auto"` unless the assembly axis is known.
+- `layout` accepts only these keys and only these enums (`additionalProperties: false` everywhere);
+  a figure may override any key in its own `layout` block.
+- Terms that look like internal part codes are rejected (`E_TERM_LOOKS_LIKE_PART_CODE`). Internal
+  part numbers must never reach a filing figure — that is a confidentiality rule, not a style rule.
+
+### Prohibitions (hard constraints)
+
+These exist because the v1 failure was a 170-line model-authored render script whose invented layout
+constants produced 97% overlapping numerals, 13.5% page occupancy and a table leaking internal part
+codes. They are not negotiable.
+
+1. **Do not write any throwaway generation script** (`gen_*.py`, a `python3 -c` one-liner that draws,
+   a notebook cell). If a figure needs geometry the CLIs do not produce, that is a capability gap.
+2. **Do not import package internals.** No `sys.path.insert` and no
+   `from patent_figure... import ...` from your side. The scripts are reachable **only** through
+   their CLIs.
+3. **Do not put layout constants in the plan** — no coordinates, gaps, text heights, margins, colours,
+   scales, angles beyond the enumerated `layout` keys.
+4. **Do not hand-fill reference numerals**, in the plan or in the DXF, or renumber the output.
+5. **Do not edit the scripts, the schemas, or the thresholds** to make a figure pass.
+6. **A filing figure carries geometry, leaders, numerals and the caption — nothing else.** No parts
+   table, no part names, no internal codes, no dimensions, no title block (contract §8). The
+   `NO./NAME/QTY/REMARK` table exists only behind `layout.engineering_table: true`, is off by
+   default, and its output is written as `<id>_engineering.dxf`, which is a review copy and never a
+   filing copy. *(The "Part table" row in
+   [references/cad-source-to-drawing.md](references/cad-source-to-drawing.md) §6 is a mechanical
+   assembly-drawing convention; contract §8 overrides it for patent figures.)*
+7. **When the CLI cannot express the requirement, stop and report the gap.** Say what is missing and
+   which command would need to carry it. A human decides whether to extend the CLI.
+
+### When validate or QA fails
+
+The only permitted repair is **editing `figure-plan.json` and re-running the loop from A3.** Every
+error and every failed check carries a `hint` naming the plan edit that fixes it — apply that edit,
+not an invention of your own. Typical repairs:
+
+| Failure | Plan edit |
+| --- | --- |
+| `E_TOO_MANY_LABELS`, or labels that cannot be placed | set `label: "none"` on standard parts, or split the figure per `assembly.json:split_suggestions` |
+| page fill too low, rotation would help | restore `layout.axis_angle` to `"auto"` so the renderer re-solves it (this branch only fires when the plan pinned an angle), or `density: "compact"` |
+| page fill too low, rotation would not help | change `layout.view`, or split the figure |
+| text height below the floor / part outline too small | `label: "none"` on standard parts, split the figure, or `density: "compact"` — note the message may say the **part count**, not the label count, is what overflowed |
+| a degenerate part, or a part with no visible curves | add it to `source.exclude` |
+| forbidden text on the sheet | fix the offending `terms[].term` |
+
+**Three consecutive failed repairs on the same figure: stop.** Report the failing checks, the edits
+already tried, and the capability gap. Do not widen the scope of the fix, and do not fall back to
+drawing anything by hand.
+
+### Route A delivery checklist
+
+1. `doctor.py` exits 0, or the missing capability is stated in the handoff.
+2. `validate_figure_plan.py` exits 0 on the final plan.
+3. `render_patent_figure.py` exits 0 — every figure passed the QA gate.
+4. The plan contains no numerals, no coordinates and no layout constants beyond the enumerated keys.
+5. No sheet carries a parts table, an internal part code or a dimension; `_engineering.dxf` files,
+   if any, are labelled as review copies in the handoff.
+6. `out/reference-numerals.json` accompanies the figures, and the 附图标记说明 sentence is quoted in
+   the handoff for the specification text.
+7. Preview PNGs were rendered from the DXF and inspected.
+
+---
+
+## Route B — clean or convert an existing drawing
+
+Produce a clean, editable CAD deliverable while preserving the source files. The expected result is
+continuous-line geometry, no patent reference numerals requested for removal, retained functional
+labels, and an AutoCAD-audited DWG plus an editable DXF.
+
 - Existing DXF: inspect the text candidates, clean a copy with `scripts/clean_patent_dxf.py`, then validate it with `scripts/validate_clean_dxf.py`.
 - Existing DWG: open or convert a copy to DXF with AutoCAD first. Do not treat a compressed DWG as a text-editable file or rewrite it with `ezdxf`.
 - Matplotlib or other vector source: preserve the source geometry and export its artists or paths to DXF. Read [references/workflow.md](references/workflow.md) for the artist-to-CAD mapping.
 - PDF, PNG, or JPG only: confirm whether the figure is vector or raster. Extract vector paths when present; otherwise trace or reconstruct the geometry. Do not claim that raster-to-vector output is dimensionally exact unless dimensions or controlled CAD are available.
 
-## Separate reference numerals from functional text
+### Separate reference numerals from functional text
 
 First inventory every text object containing numbers. Treat standalone multi-digit labels such as `100`, `310`, or `3411` as candidates, not automatic proof that they are patent references. Preserve functional identifiers and engineering content such as `A1`, `A2`, `24V`, pin names, dimensions, tolerances, and terminal labels unless the user explicitly says to remove them.
 
@@ -35,13 +240,13 @@ python3 scripts/clean_patent_dxf.py input.dxf output.dxf \
 
 For a drawing known to use every standalone multi-digit text object as an attached reference label, `--remove-standalone-candidates` is available. Run `--dry-run` first and review the report. Do not use broad numeric deletion on dimensioned drawings.
 
-## Make linework continuous
+### Make linework continuous
 
 Set graphical entities to `CONTINUOUS` and set their layers to `CONTINUOUS`; checking only the visible plot is insufficient. Preserve geometry, arrows, junctions, and functional symbols. Convert former dashed boxes, centerlines, and chain lines to solid geometry only when the user asks for all-solid figures.
 
 Generate a preview image after cleaning and compare it with the source. The preview must show that no outline, arrowhead, junction, or retained label was lost.
 
-## Create the DWG
+### Create the DWG
 
 Prefer Autodesk's own core engine over third-party DWG converters when AutoCAD is installed. The bundled converter writes to an ASCII temporary path so Chinese output paths do not get corrupted by the command-script prompt:
 
@@ -64,9 +269,7 @@ combined sheet as DXF rather than reporting a DWG that never completed.
 
 If retained Chinese text is substituted or garbled, keep the editable-text DXF and create a second DWG in which the text is converted to vector outlines before conversion. Label that tradeoff clearly: outlined text is portable but no longer editable as text.
 
-## Validate before delivery
-
-Run:
+### Route B delivery checklist
 
 ```bash
 python3 scripts/validate_clean_dxf.py cleaned.dxf
