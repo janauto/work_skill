@@ -238,7 +238,8 @@ analyze  →  plan  →  validate  →  render  →  qa  →  convert
 - 新增 `tests/golden/`：小型 STEP + 固定 plan + 规范化哈希。
   **DXF 规范化必做**：清掉 handle/`$HANDSEED`、`$TDCREATE`/`$TDUPDATE`、`$FINGERPRINTGUID`/`$VERSIONGUID`
   等易变字段后再哈希，否则金样必然假失败；
-- 新增 `scripts/doctor.py`：探测 `pythonocc-core`（最脆的依赖）、`ezdxf`、字体
+- 新增 `scripts/doctor.py`：探测 `cadquery-ocp`（本 skill 实际使用的 OCCT 绑定，pip 可装；
+  **不是** conda-only 的 `pythonocc-core`）、`ezdxf`、`jsonschema`、字体
   （`simfang.ttf`/`txt.shx`）、AutoCAD / LibreDWG，输出机器可读能力报告；
   SKILL.md 规定**首次运行先跑 doctor**，缺什么直接报，不许静默降级；
 - 新增 `requirements-pinned.txt`，锁死版本——跨机器一致性的前提。
