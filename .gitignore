@@ -1,0 +1,11 @@
+# macOS Finder 产物：曾被误跟踪进这个公开仓库
+.DS_Store
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Plan Studio 的运行时工作目录（用户数据：STEP 解析结果、GLB、plan、渲染产物）
+*.plan-studio/

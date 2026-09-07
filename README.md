@@ -186,7 +186,7 @@ Node.js is only needed for the two scraping skills; cadquery-ocp only for STEP-t
 | [`hifi-comment-tagging`](#3-hifi-comment-tagging) | 单产品的评论、退货、售后归因 | 清洗表、打标表、总结表 |
 | [`product-definition-voc`](#4-product-definition-voc) | 从评论里提炼产品定义所需的洞察 | 需求聚类、Aha moment、场景卡片 |
 | [`dvt-exploded-model-visualizer`](#5-dvt-exploded-model-visualizer) | 把整机 CAD 变成可交互的透视爆炸评审页 | 可交互 HTML、GLB、元数据 |
-| [`patent-drawing-dwg-cleanup`](#6-patent-drawing-dwg-cleanup) | 生成或清理专利附图，交付可编辑 DXF/DWG | 全实线 DXF、已审计 DWG |
+| [`patent-drawing-dwg-cleanup`](#6-patent-drawing-dwg-cleanup) | 生成或清理专利附图，交付可编辑 DXF/DWG；含浏览器端人工点标界面 | 全实线 DXF、已审计 DWG、附图标记说明 |
 
 ### 快速选择
 
@@ -200,6 +200,7 @@ Node.js is only needed for the two scraping skills; cadquery-ocp only for STEP-t
 | 给硬件团队出一版可交互爆炸图评审页 | `dvt-exploded-model-visualizer` |
 | 从 STEP 模型生成专利附图 | `patent-drawing-dwg-cleanup` |
 | 把已有 DWG/DXF 附图去编号、转实线 | `patent-drawing-dwg-cleanup` |
+| 在浏览器里点选零件、人工规划拆图与命名 | `patent-drawing-dwg-cleanup`（Plan Studio） |
 
 ---
 
@@ -387,17 +388,35 @@ python3 scripts/run_asr_pipeline.py \
 
 **从 3D CAD 生成（推荐）**
 
-直接对 STEP 装配做解析消隐（OpenCASCADE `HLRBRep`，与 AutoCAD FLATSHOT、Rhino Make2D 同一类算法），不描图、不反推位图：
+直接对 STEP 装配做解析消隐（OpenCASCADE `HLRBRep`，与 AutoCAD FLATSHOT、Rhino Make2D 同一类算法），不描图、不反推位图。
+
+链路的核心约束是：**出图意图全部压进一份 `figure-plan.json`，几何与版面由脚本确定性算出。** 计划里只写「哪些零件进哪张图、中文技术名词叫什么、标不标号」，绝不出现坐标、字高、间距或附图标记号码——号码由脚本按 `terms` 顺序发放。这样同一份计划在任何机器上渲出同一张图。
 
 ```bash
-python3 -m pip install cadquery-ocp ezdxf numpy  # cadquery-ocp 约数百 MB，请预留时间
+python3 -m pip install -r requirements-pinned.txt   # cadquery-ocp 约数百 MB，请预留时间
+python3 scripts/doctor.py                            # 环境自检，缺什么直接报，不静默降级
 
-python3 scripts/cad_hlr_to_dxf.py assembly.step --list-parts    # 只打印零件清单到屏幕，不写文件
-python3 scripts/cad_hlr_to_dxf.py assembly.step figure.dxf \
-  --view iso --explode-axis z --table --caption "图1"
+python3 scripts/analyze_assembly.py assembly.step -o assembly.json   # 零件表、主轴、同轴组、拆图建议
+python3 scripts/validate_figure_plan.py plan.json --assembly assembly.json
+python3 scripts/render_patent_figure.py plan.json --assembly assembly.json -o out/ --preview
 ```
 
-要点写在 [`references/cad-source-to-drawing.md`](patent-drawing-dwg-cleanup/references/cad-source-to-drawing.md)，其中两个坑最容易毁掉整条链路：漏取光滑曲面的轮廓线会让注塑壳体轮廓断开；画出相切接缝会让壳体看起来像多面体。
+`render` 内置 13 项 QA 闸门（占版率、页面填充、字高下限、标记零重叠、引线零交叉、引线锚点必须落在零件轮廓上、图上不得出现内部件号等），任一项不过就不出图，并给出「该改计划哪里」的修复提示。
+
+计划写法与禁令见 [`SKILL.md`](patent-drawing-dwg-cleanup/SKILL.md)，完整规格见 [`docs/impl-contract.md`](patent-drawing-dwg-cleanup/docs/impl-contract.md)，制图要点见 [`references/cad-source-to-drawing.md`](patent-drawing-dwg-cleanup/references/cad-source-to-drawing.md)——其中两个坑最容易毁掉整条链路：漏取光滑曲面的轮廓线会让注塑壳体轮廓断开；画出相切接缝会让壳体看起来像多面体。
+
+`scripts/cad_hlr_to_dxf.py` 是 v1 的单视图旧路径（无引线、无附图标记、不能拆图），保留仅为向后兼容，**不要用它出提交件**。
+
+**Plan Studio：浏览器里人工点标**
+
+计划可以由模型写，也可以由人在界面里点出来——两者产出同一份 `figure-plan.json`，走同一条渲染链路和同一套闸门：
+
+```bash
+python3 -m pip install fastapi uvicorn openpyxl    # 仅界面需要，出图链路不依赖
+python3 scripts/plan_studio.py assembly.step        # 自动开浏览器，只绑 127.0.0.1
+```
+
+3D 视图里点选零件归入图卡、逐行填中文术语（可从 `.xlsx`/`.csv` BOM 批量预填，只填空行、不覆盖人写的）、拖动行序即调整发号顺序，渲染后 SVG 预览里点附图标记数字可高亮对应零件。界面上**不存在**坐标、字高、间距输入框，也没有「跳过 QA」按钮——版面层当初从模型手里收走的理由，对人同样成立。设计与取舍见 [`docs/plan-studio-proposal.md`](patent-drawing-dwg-cleanup/docs/plan-studio-proposal.md)。
 
 **清理已有附图**
 

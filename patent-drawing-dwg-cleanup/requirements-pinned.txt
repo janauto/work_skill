@@ -17,3 +17,12 @@ numpy==2.0.2
 jsonschema==4.25.1
 matplotlib==3.9.4
 pytest==8.4.2
+
+# ---------------------------------------------------------------------------
+# Plan Studio（scripts/plan_studio.py，人工点标的浏览器界面）专用，**不在出图链路上**。
+# 故意不锁死版本：这三个包只服务界面，装不装、什么版本都不会影响 DXF 的确定性产出，
+# 而把它们写成硬依赖会让只想跑 CLI 的人被迫安装一个 Web 框架。
+# 安装： python3 -m pip install fastapi uvicorn openpyxl
+#
+#   fastapi / uvicorn  本地服务器（只绑 127.0.0.1）
+#   openpyxl           «导入 BOM» 读 .xlsx；只用 .csv 的话可以不装

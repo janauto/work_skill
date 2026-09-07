@@ -346,6 +346,32 @@ def check_txt_shx() -> dict:
                   required=False)
 
 
+def check_plan_studio() -> dict:
+    """Plan Studio's own dependencies — optional, and deliberately unpinned.
+
+    fastapi/uvicorn serve the browser UI, openpyxl reads .xlsx BOMs. None of them touches the
+    render chain, so a missing one never blocks a drawing and never changes a digest; it only
+    means the manual route is unavailable. Reporting them here saves the user from discovering
+    it as an ImportError at launch.
+    """
+    missing = []
+    for module in ("fastapi", "uvicorn", "openpyxl"):
+        try:
+            importlib.import_module(module)
+        except Exception:
+            missing.append(module)
+    fix = _pip_fix("fastapi", "uvicorn", "openpyxl")
+    if not missing:
+        return _check("plan-studio-deps", STATUS_OK,
+                      "fastapi / uvicorn / openpyxl 齐备，可运行 scripts/plan_studio.py",
+                      required=False)
+    detail = ("缺 %s —— 人工点标界面（scripts/plan_studio.py）无法启动；"
+              "命令行出图链路不受影响" % "、".join(missing))
+    if missing == ["openpyxl"]:
+        detail = "缺 openpyxl —— Plan Studio 的「导入 BOM」只能读 .csv，读不了 .xlsx"
+    return _check("plan-studio-deps", STATUS_MISSING, detail, fix, required=False)
+
+
 def check_autocad_core() -> dict:
     """AcCoreConsole — the preferred DXF->DWG route (references/workflow.md §6)."""
     hits = _expand_all(AUTOCAD_CORE_PATTERNS)
@@ -386,6 +412,7 @@ def run_checks() -> dict:
         check_txt_shx(),
         check_autocad_core(),
         check_dwgread(),
+        check_plan_studio(),
     ]
     ok = all(c["status"] == STATUS_OK for c in checks if c["required"])
     return {"checks": checks, "ok": ok}
