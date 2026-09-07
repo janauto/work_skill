@@ -90,6 +90,9 @@ export function flashParts(names, ms = 1600) {
 }
 
 export function frameAll(padding = 1.35) {
+  // 首次调用发生在第一帧渲染之前，此时 glTF 各节点的世界矩阵尚未由渲染循环
+  // 更新，expandByObject 会量出一个错误的大包围盒（实测把相机推远了 9 倍）。
+  scene.updateMatrixWorld(true);
   const box = new THREE.Box3();
   meshesByName.forEach((meshes) => meshes.forEach((m) => {
     if (m.visible) box.expandByObject(m);
@@ -181,9 +184,12 @@ export async function initViewer(container) {
   bus.on('selection', repaint);
   bus.on('active-figure', repaint);
   repaint();   // 初次上色：viewer 在 booted 事件之后才建好，错过了那班车
-  return {
+  const handle = {
     setIsolate(on) { isolate = on; repaint(); frameAll(); },
     frameAll,
     partCount: meshesByName.size,
+    meshesByName, scene, camera,   // 本地调试句柄（单机工具，无隐私面）
   };
+  window.planStudioViewer = handle;
+  return handle;
 }

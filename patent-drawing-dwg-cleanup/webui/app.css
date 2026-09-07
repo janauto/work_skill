@@ -229,3 +229,7 @@ input, select { font: inherit; color: var(--ink); }
 .log { font-family: var(--font-mono); font-size: 11px; padding: 10px 14px; white-space: pre-wrap; color: var(--ink-2); }
 .fatal { margin: 15vh auto; max-width: 40em; padding: 24px; background: var(--sheet);
   border: 1px solid var(--seal); color: var(--seal); font-size: 15px; }
+
+.head-btn-group { margin-left: auto; display: flex; gap: 6px; }
+.row-del { border: none; background: none; color: var(--ink-2); font-size: 13px; padding: 0 4px; }
+.row-del:hover { color: var(--seal); }

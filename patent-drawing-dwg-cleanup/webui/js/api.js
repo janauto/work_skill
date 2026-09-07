@@ -20,8 +20,21 @@ async function call(method, path, body) {
   return res.json();
 }
 
+async function upload(path, file) {
+  const res = await fetch(`${path}?name=${encodeURIComponent(file.name)}&token=${encodeURIComponent(token)}`, {
+    method: 'POST', headers: { 'X-Studio-Token': token }, body: file,
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch { /* 保底 */ }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 export const api = {
   state: () => call('GET', '/api/state'),
+  importBom: (file) => upload('/api/bom', file),
   savePlan: (plan) => call('PUT', '/api/plan', { plan }),
   render: () => call('POST', '/api/render'),
   renderStatus: () => call('GET', '/api/render/status'),

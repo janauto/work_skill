@@ -148,6 +148,129 @@ def blank_plan(ws: Workspace) -> dict:
     }
 
 
+# ----------------------------------------------------------------------------- BOM
+
+#: Header keywords for locating the code / name / qty columns in a BOM sheet. Chinese
+#: manufacturing BOMs vary wildly; these cover the common house styles. Matching is
+#: substring, first hit wins, scanned over the first BOM_HEADER_SCAN rows.
+BOM_CODE_HEADERS = ("物料编码", "物料代码", "物料编号", "图号", "件号", "编码", "代号",
+                    "料号", "零件号", "part no", "p/n", "partnumber", "code")
+BOM_NAME_HEADERS = ("物料名称", "零件名称", "名称", "品名", "描述", "规格名称",
+                    "description", "name")
+BOM_QTY_HEADERS = ("数量", "用量", "qty", "quantity")
+BOM_HEADER_SCAN = 30
+
+
+def _bom_rows_from_table(rows: list) -> dict:
+    """Locate the header row and pull (code -> {name, qty}) out of a 2-D table."""
+    header_idx = code_col = name_col = qty_col = None
+    for i, row in enumerate(rows[:BOM_HEADER_SCAN]):
+        cells = [str(c or "").strip().lower() for c in row]
+        c_col = n_col = q_col = None
+        for j, cell in enumerate(cells):
+            if c_col is None and any(k in cell for k in BOM_CODE_HEADERS):
+                c_col = j
+            elif n_col is None and any(k in cell for k in BOM_NAME_HEADERS):
+                n_col = j
+            elif q_col is None and any(k in cell for k in BOM_QTY_HEADERS):
+                q_col = j
+        if c_col is not None and n_col is not None:
+            header_idx, code_col, name_col, qty_col = i, c_col, n_col, q_col
+            break
+    if header_idx is None:
+        raise ValueError("找不到表头：需要同时含「件号/物料编码」列与「名称/品名」列")
+    out = {}
+    for row in rows[header_idx + 1:]:
+        code = str(row[code_col] or "").strip() if code_col < len(row) else ""
+        name = str(row[name_col] or "").strip() if name_col < len(row) else ""
+        if not code or not name:
+            continue
+        qty = None
+        if qty_col is not None and qty_col < len(row):
+            try:
+                qty = int(float(row[qty_col]))
+            except (TypeError, ValueError):
+                qty = None
+        out.setdefault(code, {"name": name, "qty": qty})
+    return out
+
+
+def parse_bom(filename: str, data: bytes) -> dict:
+    """xlsx via openpyxl（全部工作表都扫）, csv/tsv via stdlib. Returns code -> {name, qty}."""
+    suffix = Path(filename).suffix.lower()
+    if suffix in (".xlsx", ".xlsm"):
+        import io
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        merged, errors = {}, []
+        for sheet in wb.worksheets:
+            rows = [[c for c in r] for r in sheet.iter_rows(values_only=True)]
+            try:
+                found = _bom_rows_from_table(rows)
+            except ValueError as exc:
+                errors.append("%s: %s" % (sheet.title, exc))
+                continue
+            for code, info in found.items():
+                merged.setdefault(code, info)
+        if not merged:
+            raise ValueError("；".join(errors) or "工作簿为空")
+        return merged
+    if suffix in (".csv", ".tsv", ".txt"):
+        import csv
+        import io
+        text = data.decode("utf-8-sig", errors="replace")
+        dialect = "excel-tab" if suffix == ".tsv" else "excel"
+        rows = list(csv.reader(io.StringIO(text), dialect))
+        return _bom_rows_from_table(rows)
+    raise ValueError("不支持的格式 %s——请用 .xlsx 或 .csv" % suffix)
+
+
+_INSTANCE_SUFFIX = re.compile(r"(?:[_-]\d+)+$")
+
+
+def match_bom_to_parts(bom: dict, part_names: list) -> dict:
+    """Match BOM codes to STEP part names — conservatively.
+
+    The first draft also ran a longest-prefix pass. On a real assembly it filled fourteen
+    distinct gears, shells and bearings sharing one export-tool stem (``<HASH>_<seq>`` style
+    names) with a single bearing's name, and every ``BREP_*`` blob with one cover's name:
+    recall bought with wrong names, which on a patent figure is worse than no name. So only
+    two passes survive:
+
+    1. raw name == raw code;
+    2. instance-suffix-stripped equality, accepted only when the stripped key is at least
+       MIN_STEM chars AND unique on both sides (one part, one BOM row). Stripping ``_1_1``
+       style suffixes is what lets ``<CODE>_1_1`` meet its drawing code ``<CODE>``; the
+       uniqueness demand is what keeps ``BREP_<n>`` -> ``BREP`` from meeting every other
+       ``BREP_*``.
+
+    Whatever stays unmatched is reported honestly and left for the human or the model.
+    """
+    MIN_STEM = 6
+    matched = {}
+    codes = set(bom)
+    for name in part_names:
+        if name in codes:
+            matched[name] = {"code": name, "name": bom[name]["name"], "via": "exact"}
+
+    def stem_index(values):
+        index = {}
+        for v in values:
+            stem = _INSTANCE_SUFFIX.sub("", v)
+            if len(stem) >= MIN_STEM:
+                index.setdefault(stem, []).append(v)
+        return index
+
+    name_stems = stem_index(n for n in part_names if n not in matched)
+    code_stems = stem_index(codes)
+    for stem, names in name_stems.items():
+        cands = code_stems.get(stem, [])
+        if len(names) == 1 and len(cands) == 1:
+            matched[names[0]] = {"code": cands[0], "name": bom[cands[0]]["name"],
+                                 "via": "stripped"}
+    return matched
+
+
 # ----------------------------------------------------------------------------- DXF -> SVG
 
 
@@ -245,7 +368,13 @@ def build_app(ws: Workspace, token: str) -> FastAPI:
                 request.query_params.get("token")
             if supplied != token:
                 return Response("token 无效——请从终端打印的完整地址进入", status_code=401)
-        return await call_next(request)
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            # 前端是本机文件、无构建版本号：升级 Studio 后浏览器的 ES 模块缓存会继续
+            # 跑旧代码（同页导航尤甚），排障时症状诡异。本地服务器带宽为零成本，
+            # 直接禁缓存是最省心的正确解。
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     # ---- state -------------------------------------------------------------
 
@@ -286,6 +415,48 @@ def build_app(ws: Workspace, token: str) -> FastAPI:
         ws.snapshot_plan()
         ws.plan.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
         return {"validate": validate_now()}
+
+    @app.post("/api/bom")
+    async def import_bom(request: Request):
+        filename = request.query_params.get("name", "bom.xlsx")
+        data = await request.body()
+        if not data:
+            raise HTTPException(400, "空文件")
+        try:
+            bom = parse_bom(filename, data)
+        except ValueError as exc:
+            raise HTTPException(422, "BOM 解析失败：%s" % exc)
+        assembly = load_json(ws.assembly)
+        names = [p["name"] for p in assembly.get("parts", [])]
+        matched = match_bom_to_parts(bom, names)
+        plan = load_json(ws.plan)
+        ws.snapshot_plan()
+        filled, kept = [], []
+        by_selector = {t.get("selector"): t for t in plan.get("terms", [])}
+        for part, hit in matched.items():
+            row = by_selector.get(part)
+            if row is None:
+                continue
+            if (row.get("term") or "").strip():
+                kept.append(part)          # 人已填的绝不覆盖
+            else:
+                row["term"] = hit["name"]
+                filled.append(part)
+        ws.plan.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+        (ws.root / "bom.json").write_text(
+            json.dumps({"file": filename, "rows": len(bom), "matched": matched},
+                       ensure_ascii=False, indent=2), encoding="utf-8")
+        unmatched_parts = sorted(set(names) - set(matched))
+        return {
+            "plan": plan,
+            "validate": validate_now(),
+            "report": {
+                "bom_rows": len(bom), "matched_parts": len(matched),
+                "filled": len(filled), "kept_human": len(kept),
+                "unmatched_parts": unmatched_parts[:40],
+                "unmatched_count": len(unmatched_parts),
+            },
+        }
 
     # ---- render ------------------------------------------------------------
 
