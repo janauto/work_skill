@@ -733,12 +733,31 @@ def write_numerals(path: Path, num: "_numbering.Numbering",
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # A term is dropped from the numeral table when no figure ended up labelling it. Whether
+    # that deserves a warning depends entirely on WHY:
+    #
+    #   label: "none"   the author said "this is a standard part, give it no numeral". Dropping
+    #                   it is the requested outcome, so warning about it — and telling them to
+    #                   delete the term — asks them to undo what they just asked for. The
+    #                   acceptance run caught exactly that: a model was told "紧固螺钉这类标准件
+    #                   不用标号", set label:"none" as designed, was warned, and deleted the term.
+    #                   It stays a note so the numbering is still explainable, with no fix line.
+    #
+    #   once / all      the author DID want a numeral and no figure delivered one. That is the
+    #                   real accident: the numbering now has a hole. Warn, and say how to fix it.
     warnings = []
     for entry in dropped:
+        if entry.label == "none":
+            warnings.append(
+                "term %d（%s，selector %r）按 label:\"none\" 不发标记，未计入 %s。"
+                "这是计划里要求的结果，无需处理。"
+                % (entry.numeral, entry.term, entry.selector, NUMERALS_FILENAME))
+            continue
         warnings.append(
-            "term %d（%s，selector %r）在任何一张图上都没有被标注，已从 %s 中略去，"
-            "标记号因此出现空号。修复：把它从 plan 的 terms 里删掉，或让某张图标注它。"
-            % (entry.numeral, entry.term, entry.selector, NUMERALS_FILENAME))
+            "term %d（%s，selector %r，label:%s）在任何一张图上都没有被标注，已从 %s 中略去，"
+            "标记号因此出现空号。修复：把它从 plan 的 terms 里删掉，"
+            "或让某张图标注它，或把它的 label 改成 \"none\"（若它本就是标准件）。"
+            % (entry.numeral, entry.term, entry.selector, entry.label, NUMERALS_FILENAME))
     return doc, warnings
 
 

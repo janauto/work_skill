@@ -325,3 +325,25 @@ if __name__ == "__main__":  # pragma: no cover
         raise SystemExit(_update())
     sys.stderr.write("用法：python3 tests/test_golden.py --update\n")
     raise SystemExit(2)
+
+
+def test_label_none_is_reported_as_intended_not_as_a_defect(rendered):
+    """回归：`label:"none"` 的术语被略去时，不能提示用户去删掉它。
+
+    验收实测暴露的矛盾：模型被要求「紧固螺钉这类标准件不用标号」，
+    照设计设了 `label:"none"`，渲染器却警告「标记号出现空号，修复：把它从 terms 里删掉」——
+    工具在劝模型撤销用户刚提的要求。金样计划里 SYN-H08* 正是 `label:"none"`，
+    所以这条能稳定复现。
+
+    分流标准：`none` 是计划里要的结果，只作说明、不给修复动作；
+    `once`/`all` 落空才是真事故（编号出现空洞），要给修复路径。
+    """
+    # 警告走 stderr（它是诊断信息不是产出），所以两个流都读，避免以后改了流向测试静默失效。
+    proc = rendered["proc_b"]
+    log = (proc.stderr or "") + "\n" + (proc.stdout or "")
+    none_lines = [ln for ln in log.splitlines() if "紧固螺钉" in ln]
+    assert none_lines, "金样计划里 SYN-H08* 是 label:none，应当有一条说明"
+    line = none_lines[0]
+    assert 'label:"none"' in line, "说明里应点明这是 label:\"none\" 的结果：%s" % line
+    assert "无需处理" in line, "label:none 是计划要的结果，不该要求处理：%s" % line
+    assert "删掉" not in line, "不得劝用户删掉一个他刻意设为 none 的术语：%s" % line
