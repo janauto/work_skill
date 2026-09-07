@@ -326,9 +326,9 @@ def test_anchor_gap_gate_catches_leaders_that_point_at_nothing(tmp_path):
     # 把每条引线的锚点端整体外移——模拟「锚点落在包围盒角点」的效果
     doc = ezdxf.readfile(str(path))
     msp = doc.modelspace()
-    # 引线的锚点端 = 与 LEADER 图层锚点圆重合的那个端点。渲染器按契约写两段 LINE，
-    # 本测试的 write_figure 辅助写三点 LWPOLYLINE——两种形态都要能搬，
-    # 否则实体形态一变，这道闸门的自测就会静默失效。
+    # 引线的锚点端 = 与 LEADER 图层锚点圆重合的那个端点。实测渲染器与本测试的
+    # write_figure 辅助都写三点 LWPOLYLINE；两种形态都处理，是为了实体形态一旦改变，
+    # 这道闸门的自测不会静默失效（改成 LINE 也照样搬得动）。
     dots = [(e.dxf.center[0], e.dxf.center[1]) for e in msp
             if e.dxf.layer == "LEADER" and e.dxftype() == "CIRCLE"]
 

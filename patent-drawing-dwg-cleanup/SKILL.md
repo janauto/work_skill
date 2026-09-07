@@ -29,6 +29,21 @@ numeral is ever written by you: the scripts compute all of them. The full specif
 [docs/iteration-plan-v2.md](docs/iteration-plan-v2.md). Read the contract before deviating from
 anything on this page — and then do not deviate, report instead (see *Prohibitions*).
 
+### Verifying an install
+
+A new machine or runtime should prove the toolchain works before doing real work:
+
+```bash
+python3 acceptance/run_acceptance.py
+```
+
+Fourteen nodes, about forty seconds, exit 0 only if every one passes. Two of them earn
+their keep: one deliberately breaks a good drawing to prove the QA gate can fail at all,
+and one compares this machine's rendering against a digest recorded in the repository —
+which is what makes "any runtime renders the same figure" a checked claim rather than a
+promise. See [acceptance/README.md](acceptance/README.md); the behavioural half, which no
+script can judge, is in [acceptance/行为验收.md](acceptance/行为验收.md).
+
 ### Two authors, one plan
 
 A plan can be written by a model (below) or clicked together by a person in **Plan Studio**
