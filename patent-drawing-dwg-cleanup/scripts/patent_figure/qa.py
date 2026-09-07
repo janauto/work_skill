@@ -104,6 +104,15 @@ DEFAULT_THRESHOLDS: Dict[str, float] = {
     "non_numeral_text_ratio_max": 0.10,
     "leader_crossing_max": 0,
     "leader_hits_numeral_box_max": 0,
+    # A leader must ATTACH to the part it names. Expressed as a fraction of the sheet diagonal so
+    # it is scale-free. 1% catches the defect this gate was written for — anchors taken from a
+    # part's bounding box instead of its silhouette, measured at up to 12% of the diagonal away
+    # on a real assembly, i.e. leaders visibly pointing at empty paper. It deliberately does NOT
+    # demand zero: in an assembly view a labelled part may be partly occluded, so its true
+    # silhouette anchor can sit a couple of millimetres from the nearest DRAWN line (measured at
+    # 0.8% on the synthetic assembly). Snapping such an anchor onto the nearest visible line
+    # would be worse — it can land on a neighbouring part and name the wrong thing.
+    "leader_anchor_gap_ratio_max": 0.01,
     "non_continuous_max": 0,
 }
 
@@ -119,6 +128,7 @@ CHECK_ORDER = (
     "label_overlap_pairs",
     "leader_hits_numeral_box",
     "leader_crossing",
+    "leader_anchor_gap",
     "part_bbox_overlap_pairs",
     "labels_per_figure",
     "non_numeral_text_ratio",
@@ -174,6 +184,18 @@ def usable_area_mm(h: float) -> Tuple[float, float]:
 # ===========================================================================
 def _q(v: float) -> float:
     return round(float(v), RANK_DEC)
+
+
+def _point_seg_distance(p, a, b) -> float:
+    """Distance from point p to segment a-b. Plain scalar maths: the counts here are small
+    (leaders x geometry segments) and a closed form keeps the result platform-independent."""
+    ax, ay = float(a[0]), float(a[1])
+    vx, vy = float(b[0]) - ax, float(b[1]) - ay
+    wx, wy = float(p[0]) - ax, float(p[1]) - ay
+    denom = vx * vx + vy * vy
+    t = 0.0 if denom <= 0.0 else (wx * vx + wy * vy) / denom
+    t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+    return math.hypot(wx - vx * t, wy - vy * t)
 
 
 def _box_area(b: Sequence[float]) -> float:
@@ -783,6 +805,44 @@ def _run_checks(dxf: Path, doc, th: Dict[str, Any], patterns: List[str],
                       _fmt(first[1][0], 1), _fmt(first[1][1], 1)) if first else "。")),
         hint="引线交叉：减少本图标记数（terms[].label=\"none\"）或按 "
              "assembly.json:split_suggestions 拆图。")
+
+    # ---- 7b. leader_anchor_gap ----------------------------------------------
+    lim_ratio = float(th["leader_anchor_gap_ratio_max"])
+    lim_mm = lim_ratio * geom_diag
+    gaps = []
+    geom_segs = []
+    for r in records:
+        if r.layer not in GEOMETRY_LAYERS or len(r.points) < 2:
+            continue
+        pts = r.points
+        for i in range(len(pts) - 1):
+            geom_segs.append((pts[i], pts[i + 1]))
+    for ld in leaders:
+        a = ld.points[0]
+        best = None
+        for (p0, p1) in geom_segs:
+            d = _point_seg_distance(a, p0, p1)
+            if best is None or d < best:
+                best = d
+        if best is not None:
+            gaps.append((round(best, RANK_DEC), round(a[0], RANK_DEC), round(a[1], RANK_DEC)))
+    worst = max(g[0] for g in gaps) if gaps else 0.0
+    over = [g for g in gaps if g[0] > lim_mm]
+    if not gaps:
+        detail = "本图没有引线。"
+    else:
+        detail = ("%d 条引线的锚点离最近几何：中位 %.3f mm、最大 %.3f mm（上限 %.3f mm = "
+                  "图幅对角 %.1f mm 的 %.1f%%）。" %
+                  (len(gaps), sorted(g[0] for g in gaps)[len(gaps) // 2], worst,
+                   lim_mm, geom_diag, lim_ratio * 100.0))
+        if over:
+            detail += "超限的锚点：" + "、".join(
+                "(%.1f, %.1f) 差 %.2f mm" % (g[1], g[2], g[0]) for g in over[:5])
+    out["leader_anchor_gap"] = Check(
+        id="leader_anchor_gap", passed=worst <= lim_mm + eps_body,
+        value=round(worst, 3), threshold="<=%.3f mm" % lim_mm, detail=detail,
+        hint=("引线没有落在它所指的零件轮廓上，读图者无法判断标记指的是哪个件。"
+              "若该零件在本视图里被遮挡，改用分解图标注它，或把它从本图的 members 中移除。"))
 
     # ---- 8. part_bbox_overlap_pairs (contract section 11.10 #5, per BODY) ---
     lim = int(th["part_bbox_overlap_pairs_max"])

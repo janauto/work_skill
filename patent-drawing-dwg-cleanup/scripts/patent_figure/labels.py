@@ -132,6 +132,11 @@ class LabelRequest:
     lo: np.ndarray
     hi: np.ndarray
     anchor_hint: Optional[np.ndarray] = None
+    #: (N, 2) sampled points of THIS part's own placed curves, in sheet millimetres. When given,
+    #: every candidate direction anchors on a real outline point instead of on the bounding box.
+    #: Without it the anchor falls back to the AABB, which for a ring, an L or any concave part
+    #: sits in empty space — measured at up to 12% of the sheet diagonal away from the part.
+    outline: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -192,6 +197,47 @@ def _seg_hits_box(p0, p1, blo, bhi, eps) -> bool:
         if _seg_cross(p0, p1, c[k], c[(k + 1) % 4], eps):
             return True
     return False
+
+
+def _outline_anchor(outline: np.ndarray, d):
+    """The outline point that reaches furthest along ``d`` — where a draftsman would attach a
+    leader arriving from that direction, and always ON the part.
+
+    Same recipe as the contract's §11.7.2 anchor_hint, only parameterised by direction instead
+    of being computed once: rank on ``(round(-p·d), round(x), round(y))`` and take the smallest.
+    Being an extreme point along ``d`` it lies on the convex hull, so it is on the silhouette for
+    every part shape, and it is the farthest point along ``d`` — so ``anchor + d * dist`` is
+    guaranteed to clear the whole part.
+    """
+    proj = np.round(-(outline[:, 0] * d[0] + outline[:, 1] * d[1]), RANK_DEC)
+    best = proj.min()
+    tie = outline[proj == best]
+    if tie.shape[0] > 1:                       # deterministic tie-break, lexicographic on (x, y)
+        order = np.lexsort((np.round(tie[:, 1], RANK_DEC), np.round(tie[:, 0], RANK_DEC)))
+        tie = tie[order]
+    return (float(tie[0, 0]), float(tie[0, 1]))
+
+
+def _seg_beyond_box(a, b, lo, hi, eps):
+    """The portion of segment a->b that lies beyond the box, as a new start point.
+
+    Used to clip a leader's root before testing it against OTHER parts. The anchor sits on its
+    own part's silhouette, so the first stretch of the leader is legitimately inside that part's
+    own envelope; testing that stretch against neighbours punishes a leader for where it is
+    required to start. In an assembly view part boxes overlap heavily, so without this clip a
+    nested part becomes unlabellable — measured on the synthetic fixture, numeral 3 lost all 48
+    candidates. Slab method; if a->b never leaves the box, return b (nothing left to test).
+    """
+    ax, ay = float(a[0]), float(a[1])
+    dx, dy = float(b[0]) - ax, float(b[1]) - ay
+    t_exit = 0.0
+    for p0, d0, l0, h0 in ((ax, dx, lo[0], hi[0]), (ay, dy, lo[1], hi[1])):
+        if abs(d0) <= eps:
+            continue
+        t1, t2 = (l0 - p0) / d0, (h0 - p0) / d0
+        t_exit = max(t_exit, min(1.0, max(t1, t2)))
+    t_exit = min(1.0, max(0.0, t_exit))
+    return (ax + dx * t_exit, ay + dy * t_exit)
 
 
 def _ray_exit_aabb(c, d, lo, hi):
@@ -285,22 +331,33 @@ def place_labels(requests: List[LabelRequest], *, obstacles: List[np.ndarray],
         # Direction sort key: (-cos(delta) ascending = deviation ascending, direction index).
         order_d = sorted(range(N_DIRS),
                          key=lambda k: (round(-(px * _DIRS[k][0] + py * _DIRS[k][1]), RANK_DEC), k))
-        # anchor_hint only overrides the anchor of the least-deviating direction (it is the only
-        # point guaranteed to sit on the real outline).
+        # With an outline every direction gets a real silhouette anchor. anchor_hint then only
+        # still matters for the preferred direction above; keeping it as the snap_dir anchor as
+        # well is harmless because _outline_anchor reproduces it exactly for that direction.
         snap_dir = order_d[0]
+        outline = r.outline if (r.outline is not None and len(r.outline)) else None
         ndig = len(str(int(r.numeral)))
         tw = CHAR_W * h * ndig
         out: List[Dict[str, Any]] = []
         for rank, k in enumerate(order_d):
             d = _DIRS[k]
-            base = _ray_exit_aabb(c, d, lo, hi)
-            if r.anchor_hint is not None and k == snap_dir:
+            base = _ray_exit_aabb(c, d, lo, hi)      # elbow/ring reference, see below
+            if outline is not None:
+                anchor = _outline_anchor(outline, d)
+            elif r.anchor_hint is not None and k == snap_dir:
                 anchor = (float(r.anchor_hint[0]), float(r.anchor_hint[1]))
             else:
                 anchor = base
             dth = math.acos(max(-1.0, min(1.0, px * d[0] + py * d[1])))   # angle vs preferred dir
             for j in range(RING_COUNT):
                 dist = RING_BASE_K * (RING_GROWTH ** j) * h
+                # Elbow stays measured from the AABB ray-exit, NOT from the anchor. Anchoring it
+                # to the silhouette instead was tried and reverted: it moves the numeral box
+                # laterally to wherever the part happens to reach furthest along d, and in a
+                # dense assembly view that lands the box on other geometry — numeral 3 of the
+                # synthetic assembly lost all 48 candidates, 24 of them to box_on_geom. Where
+                # the leader ATTACHES is the anchor's job; where the numeral SITS is the
+                # elbow's, and the two want different reference points.
                 elbow = (base[0] + d[0] * dist, base[1] + d[1] * dist)
                 sgn = 1.0 if round(d[0], RANK_DEC) > 0.0 else -1.0    # PER CANDIDATE, not global
                 land = (elbow[0] + sgn * LAND_K * h, elbow[1])        # horizontal landing (GB)
@@ -312,6 +369,8 @@ def place_labels(requests: List[LabelRequest], *, obstacles: List[np.ndarray],
                     "idx": rank * RING_COUNT + j,       # generation index = tie-break key
                     "req": r, "dir": k, "ring": j, "dth": dth,
                     "anchor": anchor, "elbow": elbow, "land": land,
+                    # Leader root clipped to outside its own part — see _seg_beyond_box.
+                    "root_out": _seg_beyond_box(anchor, elbow, lo, hi, EPS),
                     "text_pos": (tx, land[1]),
                     "align": "left" if sgn > 0.0 else "right",
                     "blo": blo, "bhi": bhi,
@@ -336,7 +395,7 @@ def place_labels(requests: List[LabelRequest], *, obstacles: List[np.ndarray],
             if _box_overlap(cd["blo"], cd["bhi"], rlo, rhi, EPS):
                 return False                            # numeral box inside another part's box
             # GB: a leader must not run through another labelled part
-            if _seg_hits_box(cd["anchor"], cd["elbow"], rlo, rhi, EPS):
+            if _seg_hits_box(cd["root_out"], cd["elbow"], rlo, rhi, EPS):
                 return False
         return True
 

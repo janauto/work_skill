@@ -407,9 +407,13 @@ def _build_requests(labelled: Sequence[Tuple[str, int]], boxes: Dict[str, Tuple[
             direction = (1.0, 0.0)  # the part sits on the centroid: +x, deterministic
         else:
             direction = (px / norm, py / norm)
+        curves = curves_by_key.get(key, [])
+        outline = (np.vstack([np.asarray(a, dtype=np.float64) for a in curves])
+                   if curves else None)
         out.append(_labels.LabelRequest(
             key=key, numeral=int(numeral), lo=lo, hi=hi,
-            anchor_hint=_anchor_hint(curves_by_key.get(key, []), direction)))
+            anchor_hint=_anchor_hint(curves, direction),
+            outline=outline))
     return out
 
 

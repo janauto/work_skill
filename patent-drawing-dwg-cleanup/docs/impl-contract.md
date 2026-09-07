@@ -481,6 +481,12 @@ DEFAULT_THRESHOLDS = {
     "non_numeral_text_ratio_max": 0.10,
     "leader_crossing_max": 0,
     "leader_hits_numeral_box_max": 0,
+    # The leader must start ON the part it points at. Measured as the distance from the anchor
+    # to the nearest GEOM/HIDDEN segment, over the figure's diagonal. An earlier implementation
+    # anchored on the axis-aligned bounding box for every direction but one, which for a ring,
+    # an L or any concave part sits in open space: on the real assembly 29 of 40 anchors were
+    # more than 0.5 mm off the geometry and the worst was 12% of the sheet diagonal away.
+    "leader_anchor_gap_ratio_max": 0.01,
     "non_continuous_max": 0,
 }
 
@@ -1862,6 +1868,38 @@ GB/T 14691 字号系列 + CNIPA 对附图缩小后清晰度的要求，落地前
 的保留核对现行《专利审查指南》原文。若该下限被证伪为 2.5 mm，§11.1 的件数上限由 29 升到约 41，
 裁决方向不变（一维串更加够用）。
 
+
+---
+
+## 11.11 Anchor correction (2026-09-07, from real-assembly use)
+
+§11.7.2 says the anchor must "really sit on the outline". The implementation achieved that for
+exactly one direction — the snap direction, fed by `anchor_hint`. Every other candidate direction
+anchored on `_ray_exit_aabb`, a point on the **bounding box**. For a ring, an L or any concave
+part that point is in empty space, and the placer reaches those directions on every collision
+repair. Measured on a 131-instance assembly: 29 of 40 leaders attached more than 0.5 mm off the
+geometry, 20 of them more than 2 mm, worst case 28.8 mm — 12% of the sheet diagonal, i.e. leaders
+visibly pointing at blank paper.
+
+**Fix.** `LabelRequest` gains `outline` (the part's own sampled placed curves). Every candidate
+direction now anchors at `_outline_anchor(outline, d)`: the outline point with the largest
+projection on `d`, tie-broken lexicographically — the same recipe §11.7.2 already specified,
+merely parameterised by direction instead of computed once. Being an extreme point it lies on the
+convex hull, hence on the silhouette, for any part shape.
+
+**What was tried and reverted.** Moving the elbow to `anchor + d*dist` as well, so the leader root
+would run along `d`. It relocates the numeral box to wherever the part happens to reach furthest
+along `d`; in a dense assembly view that lands the box on other geometry, and numeral 3 of the
+synthetic assembly lost all 48 candidates (24 to `box_on_geom`). The elbow therefore stays on the
+AABB ray-exit: **where a leader attaches and where its numeral sits want different reference
+points.** A test asserting the along-`d` property was deleted with it — it pinned an implementation
+detail, not a requirement.
+
+**New gate.** `leader_anchor_gap_ratio_max = 0.01` of the sheet diagonal (§5.5). It is deliberately
+not zero: in an assembly view a labelled part may be partly occluded, so its true silhouette anchor
+can sit ~0.8% of the diagonal from the nearest *drawn* line. Snapping to the nearest visible line
+would be worse — it can land on a neighbour and name the wrong part. Such figures now report the
+gap instead of shipping silently; the honest fix is to label that part in an exploded figure.
 
 ---
 

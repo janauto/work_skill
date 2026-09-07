@@ -115,7 +115,11 @@ def test_thresholds_are_the_frozen_ones():
         "labels_per_figure_max": 20,
         "non_numeral_text_ratio_max": 0.10,
         "leader_crossing_max": 0,
+        # 引线锚点必须落在零件轮廓上：偏离量不得超过图幅对角的 1%。
+        # 实测缺陷：锚点曾取自包围盒，真实装配体 40 个里 29 个偏离 >0.5mm、最远达对角的 12%。
+        "leader_anchor_gap_ratio_max": 0.01,
         "leader_hits_numeral_box_max": 0,
+        "leader_anchor_gap_ratio_max": 0.01,
         "non_continuous_max": 0,
     }
     assert QA.FORBIDDEN_TEXT_PATTERNS == [r"^[A-Z]{2,4}[0-9]{4,8}(-|_)",
@@ -304,3 +308,65 @@ def test_report_is_stable_across_runs(tmp_path):
     first = json.dumps(QA.check_figure(path, kind="exploded"), ensure_ascii=False, sort_keys=True)
     second = json.dumps(QA.check_figure(path, kind="exploded"), ensure_ascii=False, sort_keys=True)
     assert first == second
+
+
+def test_anchor_gap_gate_catches_leaders_that_point_at_nothing(tmp_path):
+    """回归：引线锚点必须落在它所指的零件上。
+
+    实测缺陷——锚点取自零件包围盒而非轮廓，真实装配体上最远偏离 28.8mm，
+    占图幅对角 12%，读图者根本看不出标记指的是哪个件。这里手工把锚点搬离几何来复现。
+    """
+    import ezdxf
+    h = 5.0
+    boxes = stacked_boxes(h, n=2)
+    path = write_figure(tmp_path / "fig_ok.dxf", boxes, h)
+    ok = QA.check_figure(path, kind="exploded")
+    assert by_id(ok)["leader_anchor_gap"]["pass"] is True, by_id(ok)["leader_anchor_gap"]
+
+    # 把每条引线的锚点端整体外移——模拟「锚点落在包围盒角点」的效果
+    doc = ezdxf.readfile(str(path))
+    msp = doc.modelspace()
+    # 引线的锚点端 = 与 LEADER 图层锚点圆重合的那个端点。渲染器按契约写两段 LINE，
+    # 本测试的 write_figure 辅助写三点 LWPOLYLINE——两种形态都要能搬，
+    # 否则实体形态一变，这道闸门的自测就会静默失效。
+    dots = [(e.dxf.center[0], e.dxf.center[1]) for e in msp
+            if e.dxf.layer == "LEADER" and e.dxftype() == "CIRCLE"]
+
+    def _is_anchor(x, y):
+        return any(abs(x - cx) < 1e-6 and abs(y - cy) < 1e-6 for cx, cy in dots)
+
+    moved = 0
+    for e in list(msp):
+        if e.dxf.layer != "LEADER":
+            continue
+        kind = e.dxftype()
+        if kind == "LWPOLYLINE":
+            pts = [(pt[0], pt[1]) for pt in e.get_points()]
+            pts[0] = (pts[0][0] - 25.0, pts[0][1] - 25.0)
+            e.set_points(pts, format="xy")
+            moved += 1
+        elif kind == "LINE":
+            sx, sy = float(e.dxf.start.x), float(e.dxf.start.y)
+            ex, ey = float(e.dxf.end.x), float(e.dxf.end.y)
+            if _is_anchor(sx, sy):
+                e.dxf.start = (sx - 25.0, sy - 25.0, 0.0); moved += 1
+            elif _is_anchor(ex, ey):
+                e.dxf.end = (ex - 25.0, ey - 25.0, 0.0); moved += 1
+        elif kind == "CIRCLE":
+            cx, cy = float(e.dxf.center.x), float(e.dxf.center.y)
+            e.dxf.center = (cx - 25.0, cy - 25.0)
+    assert moved > 0, "没有找到可搬动的引线锚点端——引线实体形态与预期不符"
+    bad = tmp_path / "fig_bad_anchor.dxf"
+    doc.saveas(str(bad))
+
+    report = QA.check_figure(bad, kind="exploded")
+    gate = by_id(report)["leader_anchor_gap"]
+    assert gate["pass"] is False, gate
+    assert gate["value"] > 2.0
+    assert "遮挡" in gate["hint"] or "轮廓" in gate["hint"]
+    assert report["pass"] is False
+
+
+def test_anchor_gap_threshold_is_scale_free():
+    """阈值按图幅对角的比例给出，换图幅不会误判。"""
+    assert QA.DEFAULT_THRESHOLDS["leader_anchor_gap_ratio_max"] == 0.01

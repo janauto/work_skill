@@ -335,3 +335,49 @@ def test_text_height_for_is_the_frozen_ratio():
     # §11.6.4: the ratio gate is constructively satisfied and therefore has no discriminating
     # power — that is why qa.py must also carry the absolute text_height_mm floor.
     assert LB.text_height_for(10.0) / 10.0 <= 0.6
+
+
+import math as _math  # noqa: E402
+
+# --------------------------------------------------------------------------- anchors on outline
+
+
+def _ring(cx, cy, r_out, r_in, n=64):
+    """一个圆环：包围盒中心是空的，包围盒角点更是空的——最能暴露「锚点取包围盒」的错误。"""
+    import math as _m
+    outer = np.array([[cx + r_out * _m.cos(2 * _m.pi * i / n),
+                       cy + r_out * _m.sin(2 * _m.pi * i / n)] for i in range(n + 1)])
+    inner = np.array([[cx + r_in * _m.cos(2 * _m.pi * i / n),
+                       cy + r_in * _m.sin(2 * _m.pi * i / n)] for i in range(n + 1)])
+    return [outer, inner]
+
+
+def _min_dist_to_points(p, pts):
+    return float(np.min(np.hypot(pts[:, 0] - p[0], pts[:, 1] - p[1])))
+
+
+def test_every_anchor_sits_on_the_part_outline():
+    """回归：引线锚点必须落在零件真实轮廓上，不能落在包围盒上。
+
+    实测过的缺陷：除首选方向外，锚点一律取自 AABB 出射点，圆环/L 形零件的锚点因此悬在
+    空处——真实装配体上 40 个锚点里 29 个偏离几何 >0.5mm，最远 28.8mm（图幅对角的 12%）。
+    这里用圆环阵列复现同一条件：包围盒角点离轮廓最远，若实现退回 AABB 必然失败。
+    """
+    reqs, outlines = [], {}
+    for i in range(6):
+        cx, cy = 40.0 * i, 0.0
+        curves = _ring(cx, cy, 15.0, 9.0)
+        pts = np.vstack(curves)
+        outlines[i] = pts
+        reqs.append(LB.LabelRequest(
+            key="ring%d" % i, numeral=i + 1,
+            lo=np.array([cx - 15.0, cy - 15.0]), hi=np.array([cx + 15.0, cy + 15.0]),
+            anchor_hint=None, outline=pts))
+    placed = LB.place_labels(reqs, obstacles=[np.vstack(list(outlines.values()))],
+                            text_height=3.5, sheet_lo=(-60.0, -90.0), sheet_hi=(260.0, 90.0))
+    assert len(placed) == len(reqs)
+    by_numeral = {p.numeral: p for p in placed}
+    for i in range(6):
+        anchor = by_numeral[i + 1].leader[0]
+        assert _min_dist_to_points(anchor, outlines[i]) <= 1e-6, (
+            "标记 %d 的锚点 %r 不在轮廓上——落回包围盒了" % (i + 1, anchor))
