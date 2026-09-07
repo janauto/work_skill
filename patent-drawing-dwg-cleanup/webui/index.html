@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>图纸规划台 · Plan Studio</title>
+<link rel="stylesheet" href="./app.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/addons/"
+  }
+}
+</script>
+</head>
+<body>
+  <header id="toolbar"></header>
+
+  <main id="layout">
+    <aside id="left">
+      <section id="parts"></section>
+      <section id="issues" hidden></section>
+    </aside>
+
+    <section id="stage">
+      <div id="viewport">
+        <i class="reg reg-tl"></i><i class="reg reg-tr"></i>
+        <i class="reg reg-bl"></i><i class="reg reg-br"></i>
+      </div>
+      <div id="stage-tools">
+        <button id="btn-frame" class="btn-min" title="framing">对准视图</button>
+        <label class="check-inline"><input type="checkbox" id="btn-isolate">只看当前图</label>
+      </div>
+    </section>
+
+    <aside id="right">
+      <nav id="rtabs">
+        <button class="rtab on" data-tab="figures">图纸</button>
+        <button class="rtab" data-tab="terms">术语</button>
+        <button class="rtab" data-tab="params">参数</button>
+      </nav>
+      <section class="rpane" data-pane="figures" id="figures"></section>
+      <section class="rpane" data-pane="terms" id="terms" hidden></section>
+      <section class="rpane" data-pane="params" id="params" hidden></section>
+    </aside>
+  </main>
+
+  <footer id="drawer"></footer>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

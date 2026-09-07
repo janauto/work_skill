@@ -57,6 +57,7 @@ __all__ = [
     "scene_curves",
     "GeometryCache",
     "file_sha256",
+    "export_glb",
     "hlr_drop_stats",
 ]
 
@@ -470,6 +471,58 @@ def scene_curves(parts: Sequence, view: ViewFrame, deflection: float,
 
 
 # ------------------------------------------------------------------------------- cache
+
+
+#: Linear deflection for the GLB preview mesh, relative to each shape's bounding box
+#: (``isRelative=True``), plus the angular deflection in radians. Preview-only quality:
+#: the mesh feeds the Plan Studio picker, never a drawing, so it is deliberately coarser
+#: than anything the HLR pipeline uses and does not touch the deterministic outputs.
+GLB_LINEAR_DEFLECTION = 0.004
+GLB_ANGULAR_DEFLECTION = 0.35
+
+
+def export_glb(step: Path, out: Path) -> Path:
+    """Write a binary glTF of the assembly for the Plan Studio 3D picker.
+
+    Uses OCCT's own ``RWGltf_CafWriter`` over the XCAF document, which carries the STEP
+    component names into glTF node names — verified on the synthetic fixture: eleven
+    instance nodes, every ``SYN-*`` name intact, repeated instances as repeated nodes.
+    The picker maps a raycast hit to its node name and from there to the part name that
+    plans are written in; instance identity is not needed because every plan field
+    (``terms[].selector``, ``figures[].members``) addresses parts by name.
+
+    This is a PREVIEW artefact. Nothing in the deterministic render chain reads it, so
+    its mesh quality, node order and byte content are all allowed to vary between OCCT
+    builds without touching any golden digest.
+    """
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.Message import Message_ProgressRange
+    from OCP.RWGltf import RWGltf_CafWriter
+    from OCP.TColStd import TColStd_IndexedDataMapOfStringString
+    from OCP.TCollection import TCollection_AsciiString
+
+    reader = STEPCAFControl_Reader()
+    reader.SetNameMode(True)
+    reader.SetColorMode(False)
+    reader.SetLayerMode(False)
+    if reader.ReadFile(str(step)) != IFSelect_ReturnStatus.IFSelect_RetDone:
+        raise OccBackendError("cannot read STEP: %s" % step)
+    doc = TDocStd_Document(TCollection_ExtendedString("glb"))
+    reader.Transfer(doc)
+    tool = XCAFDoc_DocumentTool.ShapeTool_s(doc.Main())
+    roots = TDF_LabelSequence()
+    tool.GetFreeShapes(roots)
+    for i in range(1, roots.Length() + 1):
+        shape = tool.GetShape_s(roots.Value(i))
+        if shape is not None and not shape.IsNull():
+            BRepMesh_IncrementalMesh(shape, GLB_LINEAR_DEFLECTION, True,
+                                     GLB_ANGULAR_DEFLECTION, True)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    writer = RWGltf_CafWriter(TCollection_AsciiString(str(out)), True)  # True => binary .glb
+    ok = writer.Perform(doc, TColStd_IndexedDataMapOfStringString(), Message_ProgressRange())
+    if not ok or not out.is_file():
+        raise OccBackendError("glTF export failed for %s" % step)
+    return out
 
 
 def file_sha256(path: Path) -> str:

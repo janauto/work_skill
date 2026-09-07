@@ -1,0 +1,4 @@
+# Plan Studio 的运行时工作目录（用户数据：STEP 解析、GLB、plan、渲染产物）
+*.plan-studio/
+__pycache__/
+*.pyc

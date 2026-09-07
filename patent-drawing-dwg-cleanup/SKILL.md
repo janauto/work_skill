@@ -29,6 +29,15 @@ numeral is ever written by you: the scripts compute all of them. The full specif
 [docs/iteration-plan-v2.md](docs/iteration-plan-v2.md). Read the contract before deviating from
 anything on this page — and then do not deviate, report instead (see *Prohibitions*).
 
+### Two authors, one plan
+
+A plan can be written by a model (below) or clicked together by a person in **Plan Studio**
+(`python3 scripts/plan_studio.py ASM.stp` — local browser UI: pick parts in 3D, group them
+into figures, name them, render behind the same QA gate). Both authors produce the same
+`figure-plan.json` and go through identical CLIs, so a hand-made plan reproduces
+bit-identically like any other. When a human wants to adjust figure grouping, point them at
+Plan Studio instead of editing JSON by hand — and never have a model drive the Studio.
+
 ### The loop
 
 ```
