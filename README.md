@@ -506,6 +506,7 @@ flowchart LR
 - [千问操作流程与可复制 Prompt](qwen-patent-review/references/workflow.md)
 - [说明图工具与使用入口](qwen-patent-review/SKILL.md)
 - [逐页验收记录模板](qwen-patent-review/references/acceptance-template.md)
+- [冻结版验证结果与复跑命令](qwen-patent-review/references/freeze-validation.md)
 
 复现此版本：
 

@@ -7,6 +7,7 @@ description: Run a Qwen Office hardware drawing workflow from GitHub and STEP/BO
 
 冻结版本：**qwen-review-v1.0.0**。本目录与同仓库的 `patent-drawing-dwg-cleanup`
 配合使用；安装时保留这两个相邻目录。读取 [流程与千问提示词](references/workflow.md)。
+本次已执行检查及复跑命令见 [冻结验证记录](references/freeze-validation.md)。
 
 交付一页能读懂的结构说明：**左上 CAD 主图、右上功能/装配说明、图下一句概述、
 左下“序号 / 名称 / 用量 / 备注”表、图号**。每个表格条目解释作用和连接方式，
