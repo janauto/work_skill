@@ -1,0 +1,27 @@
+{
+  "schema": "qwen-patent-review/1",
+  "reference_numerals": "reference-numerals.json",
+  "parts": [
+    {
+      "id": "base", "selector": "SYN-A", "instance_ids": ["SYN/root/base/0"],
+      "function": {"text": "为上方轴件提供安装位置。", "status": "observed", "evidence": ["合成示例几何：底座中心孔"]},
+      "assembly": {"text": "与轴件的固定方式需结合装配资料核对。", "status": "pending"}
+    },
+    {
+      "id": "shaft", "selector": "SYN-B", "instance_ids": ["SYN/root/shaft/0"],
+      "function": {"text": "展示阶梯轴与中心孔的结构关系。", "status": "observed", "evidence": ["合成示例几何：阶梯轴"]},
+      "assembly": {"text": "轴件位于底座上方；分解距离是展示排版。", "status": "observed", "evidence": ["合成示例图，并非生产装配工序"]}
+    }
+  ],
+  "sheets": [
+    {
+      "id": "demo", "title": "支承结构分解", "source_dxf": "synthetic.dxf",
+      "overview": {"text": "底座 1 与阶梯轴 2 的分解展示；合成测试件。", "status": "observed", "evidence": ["合成示例"]},
+      "paragraphs": [
+        {"text": "底座中心设孔，轴件带有阶梯段。本页用于检查真实线条、引线、说明与中文零件表能否在同一页清楚对应。", "status": "observed", "evidence": ["合成示例几何"]},
+        {"text": "本测试件不定义紧固工艺、配合公差或传动功能。", "status": "pending"}
+      ],
+      "rows": ["base", "shaft"]
+    }
+  ]
+}

@@ -4,7 +4,7 @@
 
 **一套面向产品研究的 Agent 技能集 —— 从抓评论、做归因，到出硬件爆炸图和专利附图**
 
-[![Skills](https://img.shields.io/badge/技能包-6%20款可直接加载-2f6fed)](#技能包一览)
+[![Skills](https://img.shields.io/badge/技能包-7%20款可直接加载-2f6fed)](#技能包一览)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-SKILL.md-7b3fe4)](#2-安装)
 [![Codex](https://img.shields.io/badge/Codex-agents%2Fopenai.yaml-10a37f)](#2-安装)
 [![Python](https://img.shields.io/badge/Python-3.9%2B-3776ab?logo=python&logoColor=white)](#1-环境要求)
@@ -90,7 +90,7 @@ git clone https://github.com/janauto/work_skill.git
 cd work_skill
 mkdir -p ~/.claude/skills
 for d in amazon-review-scraping-skill asr-review-scraping-skill hifi-comment-tagging \
-         dvt-exploded-model-visualizer patent-drawing-dwg-cleanup product-definition-voc; do
+         dvt-exploded-model-visualizer patent-drawing-dwg-cleanup qwen-patent-review product-definition-voc; do
   cp -R "$d" ~/.claude/skills/
 done
 ```
@@ -146,16 +146,16 @@ mkdir -p .claude/skills && cp -R /path/to/work_skill/product-definition-voc .cla
 
 ### 3. 验证安装
 
-先确认 6 款技能都到位：
+先确认 7 款技能都到位：
 
 ```bash
 for d in amazon-review-scraping-skill asr-review-scraping-skill hifi-comment-tagging \
-         dvt-exploded-model-visualizer patent-drawing-dwg-cleanup product-definition-voc; do
+         dvt-exploded-model-visualizer patent-drawing-dwg-cleanup qwen-patent-review product-definition-voc; do
   [ -f ~/.claude/skills/$d/SKILL.md ] && echo "ok   $d" || echo "缺失 $d"
 done
 ```
 
-预期输出 6 行、全部以 `ok` 开头。出现 `缺失` 说明对应目录没复制成功，重跑上一步即可。
+预期输出 7 行、全部以 `ok` 开头。出现 `缺失` 说明对应目录没复制成功，重跑上一步即可。
 
 再确认脚本可运行：
 
@@ -187,6 +187,7 @@ Node.js is only needed for the two scraping skills; cadquery-ocp only for STEP-t
 | [`product-definition-voc`](#4-product-definition-voc) | 从评论里提炼产品定义所需的洞察 | 需求聚类、Aha moment、场景卡片 |
 | [`dvt-exploded-model-visualizer`](#5-dvt-exploded-model-visualizer) | 把整机 CAD 变成可交互的透视爆炸评审页 | 可交互 HTML、GLB、元数据 |
 | [`patent-drawing-dwg-cleanup`](#6-patent-drawing-dwg-cleanup) | 生成或清理专利附图，交付可编辑 DXF/DWG；含浏览器端人工点标界面 | 全实线 DXF、已审计 DWG、附图标记说明 |
+| [`qwen-patent-review`](qwen-patent-review/SKILL.md) | 千问拉取 GitHub、Web 复核、返回千问完成结构说明图与教程 | 带功能/装配说明和零件表的 DXF/DWG、PNG/PDF、验收记录 |
 
 ### 快速选择
 
@@ -201,6 +202,7 @@ Node.js is only needed for the two scraping skills; cadquery-ocp only for STEP-t
 | 从 STEP 模型生成专利附图 | `patent-drawing-dwg-cleanup` |
 | 把已有 DWG/DXF 附图去编号、转实线 | `patent-drawing-dwg-cleanup` |
 | 在浏览器里点选零件、人工规划拆图与命名 | `patent-drawing-dwg-cleanup`（Plan Studio） |
+| 在千问办公全流程完成看得懂的结构说明图 | `qwen-patent-review` + `patent-drawing-dwg-cleanup` |
 
 ---
 
@@ -490,6 +492,31 @@ flowchart LR
 
 ---
 
+## 千问办公优化流程 · 冻结版
+
+**版本：`qwen-review-v1.0.0`**。从复杂硬件模型出发，让每页图都能回答：
+“这是什么、有什么用、怎样装配、哪些地方还需要确认”。
+
+**千问从 GitHub 拉取固定版本 → 解析 STEP/BOM → Web 二次确认结构 → 回到千问生成说明图 → 逐页验收与交付。**
+
+说明图采用左上 CAD 主图、右上功能/装配说明、图下概述、左下中文零件表及图号。
+代码读取统一标记表，按真实字体宽度换行，自动计算表格行高和实例用量，
+生成可编辑 DXF 与同源 PNG/PDF；DWG 继续使用现有审计转换链路。
+
+- [千问操作流程与可复制 Prompt](qwen-patent-review/references/workflow.md)
+- [说明图工具与使用入口](qwen-patent-review/SKILL.md)
+- [逐页验收记录模板](qwen-patent-review/references/acceptance-template.md)
+
+复现此版本：
+
+```bash
+git clone --branch qwen-review-v1.0.0 https://github.com/janauto/work_skill.git
+cd work_skill
+```
+
+同名实例独立编号和工程事实的自动确认仍有边界，详见流程说明。
+公开仓库只包含通用工具、流程与合成测试件，客户 CAD/BOM 与内部图纸保存在项目工作区。
+
 ## 目录结构
 
 ```text
@@ -504,6 +531,7 @@ work_skill/
 ├── hifi-comment-tagging/             # ✅ 可加载
 ├── dvt-exploded-model-visualizer/    # ✅ 可加载
 ├── patent-drawing-dwg-cleanup/       # ✅ 可加载
+├── qwen-patent-review/               # ✅ 千问办公说明图闭环，配合上一技能
 ├── product-definition-voc/           # ✅ 可加载
 ├── product-definition-voc.skill      #    打包版（zip）
 ├── competitive-analysis-skill/       # ⚠️ 见下方说明
