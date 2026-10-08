@@ -116,6 +116,53 @@ python3 scripts/qa_patent_figure.py out/fig1.dxf --kind exploded --json qa.json
 python3 scripts/autocad_core_dxf_to_dwg.py out/fig1.dxf out/fig1.dwg
 ```
 
+**A7 — 规范标注（图号 + 件号名称表）**, on copies only. Chinese filing drafts number figures
+「图1、图2…」and, in the house style used for disclosures (交底书) and the 20260827 filing set,
+carry a 「序号｜名 称」table in a free corner of each sheet. The renderer's sheet stays the
+canonical output; this CLI derives two copies from it and never touches the source DXF:
+
+```bash
+python3 scripts/annotate_figure_sheet.py out/fig1.dxf --numerals out/reference-numerals.json \
+        --figure-number 1 -o out/fig1_annotated.dxf --preview          # 交底版：图号 + 件号表
+python3 scripts/annotate_figure_sheet.py out/fig1.dxf --numerals out/reference-numerals.json \
+        --figure-number 1 -o out/fig1_filing.dxf --no-table --preview  # 递交版：仅图号
+```
+
+Table rows are read from the NUM layer of that sheet and named from `reference-numerals.json` —
+the CLI issues no numeral and invents no name. The descriptive caption moves into the report as
+the 附图说明 sentence (「图1为……；」). The figure number is the figure's position in
+`plan.figures` (1-based); do not pass anything else.
+
+### Method flowcharts (方法流程图)
+
+Same split of authorship: you write **only** `flowchart.json` (schema `patent-flowchart/1`:
+`title`, optional `step_style` `S101`|`S1`, `nodes[{id,kind,text}]`, `edges[{from,to,label}]`,
+`kind` ∈ start / end / process / decision / io). Step numbers, box sizes, coordinates, routing and
+the figure number are computed; a node text containing a step number is rejected
+(`E_STEP_NUMBER_IN_TEXT`), and every decision needs exactly two labelled out-edges (是 / 否).
+
+```bash
+python3 scripts/render_flowchart.py flow.json --check                       # 只校验
+python3 scripts/render_flowchart.py flow.json -o out/flow1.dxf --figure-number 6 --preview --json res.json
+```
+
+Number flowcharts after the structural figures. `res.json` carries the S-number ↔ step table for
+the description.
+
+### Workbench (human UI, multi-project, DeepSeek, REST, MCP)
+
+`python3 scripts/workbench.py` starts a local web workbench (default `http://127.0.0.1:8790/?token=…`):
+home page with an example carousel and project list; one Plan Studio per project with click and
+**box selection** (left→right window, right→left crossing, Shift add, Alt subtract), AI drafting
+of part names, render with the QA gate, automatic 交底版/递交版, method flowcharts, and an export
+bundle (DXF/DWG/PNG, 说明书附图 Word, 附图说明). External callers use REST `/v1/*` (docs at `/docs`)
+or MCP `POST /mcp` with `Authorization: Bearer <token>`. The large-model channel (DeepSeek API,
+or a local CodeBuddy CLI as fallback) only drafts **semantics** — part names and flowchart steps —
+and everything it returns goes through the same validators; human-entered names are never
+overwritten. As with Plan Studio, **a model must never drive the workbench UI**; it talks to the
+REST/MCP tools. Project data lives in `~/.patent-workbench` and secrets in
+`~/.config/patent-workbench/config.json` (0600) — neither belongs in a repository.
+
 ### The only file you write: `figure-plan.json`
 
 A complete minimal plan, valid against
@@ -232,6 +279,8 @@ drawing anything by hand.
 6. `out/reference-numerals.json` accompanies the figures, and the 附图标记说明 sentence is quoted in
    the handoff for the specification text.
 7. Preview PNGs were rendered from the DXF and inspected.
+8. When the deliverable is a filing or disclosure set, `annotate_figure_sheet.py` produced the
+   「图N」copies (with or without the 件号名称表, as asked) and the 附图说明 sentences are quoted.
 
 ---
 

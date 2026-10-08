@@ -302,6 +302,59 @@ def write_figure(path: Path, *, geometry: list[np.ndarray], hidden: list[np.ndar
     doc.saveas(str(path))
 
 
+#: Preview-only stand-ins for ``simfang.ttf`` when it is not installed: (collection or font
+#: file, face name inside a .ttc). The DXF keeps recording ``simfang.ttf``; only the PNG
+#: rasteriser is pointed at a face that actually exists. Without this ezdxf falls back to a
+#: face that draws 「图」 as a filled block, which made every caption unreadable.
+PREVIEW_CJK_CANDIDATES = (
+    ("/System/Library/Fonts/Supplemental/Songti.ttc", "Songti SC Regular"),
+    ("/System/Library/Fonts/Supplemental/Songti.ttc", "STSong"),
+    ("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc", "Noto Serif CJK SC"),
+    ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "Noto Sans CJK SC"),
+    ("/System/Library/Fonts/Hiragino Sans GB.ttc", "Hiragino Sans GB W3"),
+)
+_preview_font_done = False
+
+
+def _preview_cjk_font() -> None:
+    """Map ``simfang.ttf`` to an installed CJK face for PNG previews (idempotent, best effort).
+
+    ezdxf reads only face 0 of a .ttc, so the wanted face is extracted once into a per-user
+    cache folder as a stand-alone .ttf. Any failure leaves ezdxf's own fallback in place.
+    """
+    global _preview_font_done
+    if _preview_font_done:
+        return
+    _preview_font_done = True
+    try:
+        from ezdxf.fonts import fonts
+        fm = fonts.font_manager
+        if fm.has_font(STYLE_HZ_FONT):
+            return
+        cache = Path.home() / ".cache" / "patent-drawing" / "fonts"
+        for src, face in PREVIEW_CJK_CANDIDATES:
+            if not Path(src).is_file():
+                continue
+            target = cache / ("preview-%s.ttf" % face.replace(" ", ""))
+            if not target.is_file():
+                from fontTools.ttLib import TTCollection, TTFont
+                cache.mkdir(parents=True, exist_ok=True)
+                if src.endswith(".ttc"):
+                    picked = [f for f in TTCollection(src).fonts
+                              if f["name"].getDebugName(4) == face]
+                    if not picked:
+                        continue
+                    picked[0].save(str(target))
+                else:
+                    TTFont(src).save(str(target))
+            fm.scan_folder(cache)
+            if fm.has_font(target.name):
+                fm.add_synonyms({target.name: STYLE_HZ_FONT}, reverse=False)
+                return
+    except Exception:  # pragma: no cover - preview cosmetics must never break a render
+        return
+
+
 def render_preview(dxf: Path, png: Path, dpi: int = 150) -> None:
     """Render a PNG preview **from the written DXF**, never from memory.
 
@@ -314,6 +367,7 @@ def render_preview(dxf: Path, png: Path, dpi: int = 150) -> None:
     # Imported lazily so that writing a DXF and hashing it never needs matplotlib.
     from ezdxf.addons.drawing.matplotlib import qsave
 
+    _preview_cjk_font()
     doc = ezdxf.readfile(str(dxf))
     png.parent.mkdir(parents=True, exist_ok=True)
     qsave(doc.modelspace(), str(png), bg=PREVIEW_BG, fg=PREVIEW_FG,
@@ -363,6 +417,10 @@ def _entity_record(entity: Any) -> tuple:
     if dxftype == "CIRCLE":
         c = entity.dxf.center
         coords = (_r(c[0]), _r(c[1]), _r(c[2]), _r(entity.dxf.radius))
+        return (layer, dxftype, style, "", coords)
+    if dxftype == "SOLID":   # flowchart.py 的实心箭头；结构附图不写 SOLID
+        coords = tuple(_r(v) for i in range(4)
+                       for v in tuple(entity.dxf.get("vtx%d" % i, (0, 0, 0)))[:3])
         return (layer, dxftype, style, "", coords)
     raise SheetError(
         "normalized_digest: 实体类型 %s 没有规范化规则。write_figure 只会写出 "

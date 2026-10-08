@@ -31,13 +31,14 @@ function renderTerms() {
     const issue = issues.get(i);
     const cls = issue?.severity === 'error' || codeLike ? ' row-err' : '';
     const qty = partByName(t.selector)?.instances;
+    const ai = state.aiSuggestions?.[t.selector];
     return `<tr draggable="true" data-idx="${i}" class="${cls}">
       <td class="drag" title="拖动改发号顺序">⋮⋮</td>
       <td class="num${isNone ? ' num-off' : ''}">${i + 1}</td>
       <td class="mono sel" title="点击在 3D 中选中">${t.selector}${qty > 1 ? `<em>×${qty}</em>` : ''}</td>
-      <td><input class="term-input" data-idx="${i}" value="${t.term || ''}"
+      <td><input class="term-input${ai ? ` ai-${ai.confidence}` : ''}" data-idx="${i}" value="${t.term || ''}"
                  placeholder="中文术语，如：底座"
-                 title="${issue ? issue.message : ''}"></td>
+                 title="${issue ? issue.message : (ai ? `AI 起草（把握：${({ high: '高', medium: '中', low: '低' })[ai.confidence] || ai.confidence}）${ai.reason ? '：' + ai.reason : ''}` : '')}">${ai ? `<i class="ai-mark ai-${ai.confidence}" title="AI 起草">AI</i>` : ''}</td>
       <td><select class="label-sel" data-idx="${i}">
         <option value="once"${t.label !== 'all' && t.label !== 'none' ? ' selected' : ''}>标一次</option>
         <option value="all"${t.label === 'all' ? ' selected' : ''}>逐实例</option>
@@ -194,7 +195,7 @@ function renderParams(el) {
 export function initTerms(termsEl, paramsEl) {
   root = termsEl;
   const params = () => renderParams(paramsEl);
-  ['booted', 'plan', 'validate'].forEach((evt) => bus.on(evt, renderTerms));
+  ['booted', 'plan', 'validate', 'ai-suggestions'].forEach((evt) => bus.on(evt, renderTerms));
   ['booted'].forEach((evt) => bus.on(evt, params));
   bus.on('plan-layout', params);
 }

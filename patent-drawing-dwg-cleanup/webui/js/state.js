@@ -19,6 +19,11 @@ export const state = {
   saveState: 'clean',   // clean | dirty | saving | saved | error
   workdir: '',
   step: '',
+  homeUrl: null,        // 工作台首页（单工程模式为 null）
+  llm: null,            // 大模型通道状态
+  flowcharts: [],       // 本工程的流程图
+  aiBusy: false,
+  aiSuggestions: {},    // selector -> {term, confidence, reason}
 };
 
 // 图的着色板：晒图纸上的彩铅色，区分度优先，固定顺序保证同一张图颜色稳定。
@@ -146,6 +151,10 @@ export async function boot() {
   state.rendering = data.rendering;
   state.workdir = data.workdir;
   state.step = data.step;
+  state.homeUrl = data.home_url ? `${data.home_url}?token=${encodeURIComponent(
+    new URLSearchParams(location.search).get('token') || '')}` : null;
+  state.llm = data.llm || null;
+  state.flowcharts = data.flowcharts || [];
   state.activeFigure = data.plan?.figures?.[0]?.id || null;
   bus.emit('booted');
 }

@@ -29,6 +29,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
+from types import SimpleNamespace
 
 try:
     import uvicorn
@@ -41,13 +42,17 @@ except ImportError:
     raise SystemExit(1)
 
 SCRIPTS = Path(__file__).resolve().parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+import studio_ext  # noqa: E402  规范标注 / 流程图 / AI 起草 / Word 导出
+
 REPO = SCRIPTS.parent
 WEBUI = REPO / "webui"
 PY = sys.executable or "python3"
 
 #: SVG stroke widths in millimetres, preview-only (the DXF is the deliverable, this is a picture
 #: of it). GEOM heavier than LEADER matches how the sheet is meant to read on paper.
-SVG_STROKE = {"GEOM": 0.35, "HIDDEN": 0.2, "LEADER": 0.18, "TABLE": 0.18}
+SVG_STROKE = {"GEOM": 0.35, "HIDDEN": 0.2, "LEADER": 0.18, "TABLE": 0.25}
 SVG_MARGIN_MM = 6.0
 HISTORY_KEEP = 200
 
@@ -317,6 +322,13 @@ def dxf_to_svg(dxf: Path) -> str:
             track(cx - r, cy - r); track(cx + r, cy + r)
             shapes.append('<circle class="ly-%s dot" cx="%.3f" cy="%.3f" r="%.3f"/>'
                           % (layer, cx, cy, r))
+        elif kind == "SOLID":
+            pts = [(float(e.dxf.get("vtx%d" % i)[0]), float(e.dxf.get("vtx%d" % i)[1]))
+                   for i in range(3)]
+            for x, y in pts:
+                track(x, y)
+            shapes.append('<polygon class="ly-%s solid" points="%s"/>'
+                          % (layer, " ".join("%.3f,%.3f" % q for q in pts)))
         elif kind == "TEXT":
             align, p1, _ = e.get_placement()   # ezdxf: (alignment, p1, p2) — 对齐枚举在首位
             x, y = float(p1[0]), float(p1[1])
@@ -340,9 +352,10 @@ def dxf_to_svg(dxf: Path) -> str:
     styles = "".join(".ly-%s{stroke-width:%.2f}" % (k, v) for k, v in SVG_STROKE.items())
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="%.3f %.3f %.3f %.3f" '
-        'font-family="system-ui, \'PingFang SC\', sans-serif">'
+        'font-family="\'Songti SC\', \'STSong\', \'SimSun\', serif">'
         '<style>line,polyline,polygon,circle{stroke:#1a1a1a;fill:none;stroke-linecap:round}'
-        'circle.dot{fill:#1a1a1a;stroke:none}'
+        'circle.dot,polygon.solid{fill:#1a1a1a;stroke:none}'
+        'text.ly-NUM{font-family:Helvetica,Arial,sans-serif}'
         'text{fill:#1a1a1a;dominant-baseline:central}'
         'text[data-numeral]{cursor:pointer}text[data-numeral]:hover{fill:#0a6cbd}%s</style>'
         '<g transform="scale(1,-1)">%s</g>%s</svg>'
@@ -353,23 +366,48 @@ def dxf_to_svg(dxf: Path) -> str:
 # ----------------------------------------------------------------------------- app
 
 
-def build_app(ws: Workspace, token: str) -> FastAPI:
+def _llm_status() -> dict:
+    try:
+        import workbench_llm
+        return workbench_llm.public_settings()
+    except Exception as exc:  # pragma: no cover
+        return {"provider": "none", "provider_label": "大模型模块不可用：%s" % exc}
+
+
+async def _run_sync(fn):
+    """在线程池里跑阻塞调用（大模型、CLI），不卡住事件循环。"""
+    from starlette.concurrency import run_in_threadpool
+    return await run_in_threadpool(fn)
+
+
+def build_app(ws: Workspace, token: str, home_url: str | None = None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     render_lock = threading.Lock()
     render_state: dict = {"running": False, "result": None, "started": None}
+    try:
+        render_state["result"] = json.loads((ws.root / "last_render.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
         host = (request.headers.get("host") or "").split(":")[0]
         if host not in ("127.0.0.1", "localhost"):
             return Response("仅限本机访问", status_code=403)
-        if request.url.path.startswith("/api/"):
+        # 挂在工作台 /p/<id>/ 之下时，scope.path 是完整路径、root_path 是前缀——
+        # 只看 url.path 会让 /p/<id>/api/* 绕过 token 校验，所以按相对路径判断。
+        path = request.scope.get("path", "")
+        root = request.scope.get("root_path", "") or ""
+        rel = path[len(root):] if root and path.startswith(root) else path
+        if rel.startswith("/api/"):
+            auth = request.headers.get("authorization", "")
             supplied = request.headers.get("x-studio-token") or \
-                request.query_params.get("token")
-            if supplied != token:
+                request.query_params.get("token") or \
+                (auth[7:] if auth.lower().startswith("bearer ") else None)
+            if not secrets.compare_digest(str(supplied or ""), token):
                 return Response("token 无效——请从终端打印的完整地址进入", status_code=401)
         response = await call_next(request)
-        if not request.url.path.startswith("/api/"):
+        if not rel.startswith("/api/"):
             # 前端是本机文件、无构建版本号：升级 Studio 后浏览器的 ES 模块缓存会继续
             # 跑旧代码（同页导航尤甚），排障时症状诡异。本地服务器带宽为零成本，
             # 直接禁缓存是最省心的正确解。
@@ -404,6 +442,9 @@ def build_app(ws: Workspace, token: str) -> FastAPI:
             "validate": validate_now(),
             "render": render_state["result"],
             "rendering": render_state["running"],
+            "home_url": home_url,
+            "flowcharts": studio_ext.list_flowcharts(ws),
+            "llm": _llm_status(),
         }
 
     @app.put("/api/plan")
@@ -489,6 +530,8 @@ def build_app(ws: Workspace, token: str) -> FastAPI:
                 resolve_numeral_parts(result["numerals"], part_names)
             for dxf in sorted(ws.out.glob("*.dxf")):
                 fig_id = dxf.stem
+                if fig_id.endswith(("_annotated", "_filing", "_engineering")):
+                    continue
                 (ws.out / (fig_id + ".svg")).write_text(dxf_to_svg(dxf), encoding="utf-8")
                 qa_file = ws.out / (fig_id + ".qa.json")
                 qa = load_json(qa_file) if qa_file.is_file() else None
@@ -498,20 +541,47 @@ def build_app(ws: Workspace, token: str) -> FastAPI:
                     "qa": qa,
                     "svg": "/api/preview/%s.svg" % fig_id,
                 })
+            if any(f["pass"] for f in result["figures"]):
+                studio_ext.annotate_all(ws, run_cli, dxf_to_svg, result)
         except Exception as exc:  # surfaced to the UI, never swallowed
             result["log"] += "\n渲染进程异常：%r" % exc
         finally:
             result["finished"] = time.strftime("%H:%M:%S")
+            result["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            try:   # 落盘：重启后首页轮播与外部 API 仍能取到最近一次结果
+                (ws.root / "last_render.json").write_text(
+                    json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+            except OSError:
+                pass
             render_state["result"] = result
             render_state["running"] = False
             render_lock.release()
 
-    @app.post("/api/render")
-    def render():
+    def start_render() -> bool:
         if not render_lock.acquire(blocking=False):
-            raise HTTPException(409, "已有一次渲染在进行——几何缓存不支持并发写入")
+            return False
         render_state.update(running=True, started=time.strftime("%H:%M:%S"))
         threading.Thread(target=render_job, daemon=True).start()
+        return True
+
+    def render_and_wait(timeout: float = 1800.0) -> dict:
+        """给工作台 API / MCP 用：同步跑完一次渲染（含规范标注）并返回结果。"""
+        if not start_render():
+            deadline = time.time() + timeout
+            while render_state["running"] and time.time() < deadline:
+                time.sleep(1.0)
+            if not start_render():
+                raise RuntimeError("已有一次渲染在进行")
+        deadline = time.time() + timeout
+        time.sleep(0.2)
+        while render_state["running"] and time.time() < deadline:
+            time.sleep(1.0)
+        return render_state["result"] or {}
+
+    @app.post("/api/render")
+    def render():
+        if not start_render():
+            raise HTTPException(409, "已有一次渲染在进行——几何缓存不支持并发写入")
         return {"started": render_state["started"]}
 
     @app.get("/api/render/status")
@@ -536,10 +606,7 @@ def build_app(ws: Workspace, token: str) -> FastAPI:
 
     # ---- export ------------------------------------------------------------
 
-    @app.post("/api/export")
-    async def export(request: Request):
-        body = await request.json()
-        want_dwg = bool(body.get("dwg", False))
+    def export_now(want_dwg: bool) -> dict:
         result = render_state["result"]
         if not (result and result.get("ok") and result["figures"]
                 and all(f["pass"] for f in result["figures"])):
@@ -547,36 +614,142 @@ def build_app(ws: Workspace, token: str) -> FastAPI:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         dest = ws.root / ("export-%s" % stamp)
         dest.mkdir(parents=True)
-        files = []
-        for fig in result["figures"]:
-            for suffix in (".dxf", ".png", ".svg"):
-                src = ws.out / (fig["id"] + suffix)
-                if src.is_file():
-                    shutil.copy2(src, dest / src.name)
-                    files.append(src.name)
-        numerals = ws.out / "reference-numerals.json"
-        if numerals.is_file():
-            shutil.copy2(numerals, dest / numerals.name)
-            files.append(numerals.name)
-            text = load_json(numerals).get("description_zh", "")
-            (dest / "附图标记说明.txt").write_text(text + "\n", encoding="utf-8")
-            files.append("附图标记说明.txt")
-        dwg_log = []
-        if want_dwg:
-            for fig in result["figures"]:
-                dxf = dest / (fig["id"] + ".dxf")
-                proc = run_cli([str(SCRIPTS / "autocad_core_dxf_to_dwg.py"), str(dxf),
-                               str(dest / (fig["id"] + ".dwg"))], timeout=600)
-                if proc.returncode != 0:
-                    proc = run_cli([str(SCRIPTS / "libredwg_dxf_to_dwg.py"), str(dxf),
-                                   "-o", str(dest)], timeout=600)
-                    dwg_log.append("%s: AutoCAD 失败，改用 LibreDWG（exit=%d）"
-                                   % (fig["id"], proc.returncode))
-                else:
-                    dwg_log.append("%s: AutoCAD 转换成功" % fig["id"])
-                if (dest / (fig["id"] + ".dwg")).is_file():
-                    files.append(fig["id"] + ".dwg")
-        return {"dir": str(dest), "files": sorted(set(files)), "dwg_log": dwg_log}
+        bundle = studio_ext.export_bundle(ws, result, dest, run_cli, want_dwg)
+        # 不用 shutil.make_archive：它会 os.getcwd()，服务进程的 cwd 不可读时直接抛错
+        import zipfile
+        archive = dest.with_suffix(".zip")
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in sorted(dest.rglob("*")):
+                if f.is_file():
+                    zf.write(f, f.relative_to(dest).as_posix())
+        bundle.update(dir=str(dest), zip=archive.name)
+        return bundle
+
+    @app.post("/api/export")
+    async def export(request: Request):
+        body = await request.json()
+        return await _run_sync(lambda: export_now(bool(body.get("dwg", False))))
+
+    @app.get("/api/export-file/{name}")
+    def export_file(name: str):
+        if not re.fullmatch(r"export-\d{8}-\d{6}\.zip", name):
+            raise HTTPException(400, "非法文件名")
+        path = ws.root / name
+        if not path.is_file():
+            raise HTTPException(404)
+        return FileResponse(str(path), media_type="application/zip", filename=name)
+
+    # ---- flowcharts ---------------------------------------------------------
+
+    @app.get("/api/flow-preview/{name}")
+    def flow_preview(name: str):
+        if not re.fullmatch(r"[A-Za-z0-9_\-]+\.(svg|png|dxf)", name):
+            raise HTTPException(400, "非法文件名")
+        path = studio_ext.flow_out(ws) / name
+        if not path.is_file():
+            raise HTTPException(404)
+        media = {"svg": "image/svg+xml", "png": "image/png",
+                 "dxf": "application/octet-stream"}[path.suffix[1:]]
+        return FileResponse(str(path), media_type=media)
+
+    @app.get("/api/flowcharts")
+    def flowcharts():
+        return {"flowcharts": studio_ext.list_flowcharts(ws)}
+
+    @app.post("/api/flowcharts")
+    async def flowchart_new(request: Request):
+        body = await request.json()
+        fid = body.get("id") or studio_ext.next_flow_id(ws)
+        spec = body.get("spec") or {
+            "schema": "patent-flowchart/1", "title": "方法流程图",
+            "nodes": [{"id": "s", "kind": "start", "text": "开始"},
+                      {"id": "a", "kind": "process", "text": "第一步"},
+                      {"id": "e", "kind": "end", "text": "结束"}],
+            "edges": [{"from": "s", "to": "a"}, {"from": "a", "to": "e"}]}
+        try:
+            saved = studio_ext.save_flowchart(ws, fid, spec)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        return {"id": fid, **saved, "flowcharts": studio_ext.list_flowcharts(ws)}
+
+    @app.put("/api/flowcharts/{fid}")
+    async def flowchart_save(fid: str, request: Request):
+        body = await request.json()
+        try:
+            saved = studio_ext.save_flowchart(ws, fid, body.get("spec") or {})
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        return saved
+
+    @app.post("/api/flowcharts/{fid}/render")
+    def flowchart_render(fid: str):
+        try:
+            res = studio_ext.render_flowchart(ws, fid, run_cli, dxf_to_svg)
+        except FileNotFoundError:
+            raise HTTPException(404, "没有这张流程图")
+        return {"result": res, "flowcharts": studio_ext.list_flowcharts(ws)}
+
+    @app.delete("/api/flowcharts/{fid}")
+    def flowchart_delete(fid: str):
+        studio_ext.delete_flowchart(ws, fid)
+        return {"flowcharts": studio_ext.list_flowcharts(ws)}
+
+    @app.post("/api/flowcharts-ai")
+    async def flowchart_ai(request: Request):
+        body = await request.json()
+        text = str(body.get("text", "")).strip()
+        if len(text) < 6:
+            raise HTTPException(422, "请先写一段方法步骤描述")
+        import workbench_llm
+        from patent_figure import flowchart as FC
+        try:
+            spec = await _run_sync(lambda: workbench_llm.flowchart_from_text(
+                text, str(body.get("title", "")), validate=FC.validate))
+        except workbench_llm.LLMError as exc:
+            raise HTTPException(502, "大模型调用失败：%s" % exc)
+        fid = body.get("id") or studio_ext.next_flow_id(ws)
+        saved = studio_ext.save_flowchart(ws, fid, spec)
+        res = None
+        if not [i for i in saved["issues"] if i["severity"] == "error"]:
+            res = await _run_sync(lambda: studio_ext.render_flowchart(ws, fid, run_cli, dxf_to_svg))
+        return {"id": fid, "spec": spec, **saved, "result": res,
+                "flowcharts": studio_ext.list_flowcharts(ws)}
+
+    # ---- AI 起草术语 ----------------------------------------------------------
+
+    @app.get("/api/llm/status")
+    def llm_status():
+        return _llm_status()
+
+    @app.post("/api/llm/draft-terms")
+    async def llm_draft_terms(request: Request):
+        body = await request.json()
+        import workbench_llm
+        try:
+            rows = await _run_sync(lambda: workbench_llm.draft_terms(
+                load_json(ws.assembly), load_json(ws.plan),
+                glossary=studio_ext.glossary_of(ws), bom=studio_ext.bom_names_of(ws),
+                only_empty=not body.get("overwrite", False)))
+        except workbench_llm.LLMError as exc:
+            raise HTTPException(502, "大模型调用失败：%s" % exc)
+        applied = None
+        if body.get("apply", True):
+            applied = studio_ext.apply_terms(ws, rows, overwrite=bool(body.get("overwrite")))
+        return {"suggestions": rows, "applied": applied, "plan": load_json(ws.plan),
+                "validate": validate_now()}
+
+    @app.post("/api/terms")
+    async def put_terms(request: Request):
+        """外部调用（千问办公 / API）直接写术语：同样只填空白，除非 overwrite。"""
+        body = await request.json()
+        rows = body.get("terms") or []
+        applied = studio_ext.apply_terms(ws, rows, overwrite=bool(body.get("overwrite")))
+        return {"applied": {k: v for k, v in applied.items() if k != "plan"},
+                "validate": validate_now()}
+
+    app.state.studio = SimpleNamespace(
+        ws=ws, render_and_wait=render_and_wait, render_state=render_state,
+        validate_now=validate_now, export_now=export_now, start_render=start_render)
 
     app.mount("/", StaticFiles(directory=str(WEBUI), html=True), name="webui")
     return app

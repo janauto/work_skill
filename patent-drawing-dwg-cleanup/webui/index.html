@@ -29,8 +29,10 @@
         <i class="reg reg-bl"></i><i class="reg reg-br"></i>
       </div>
       <div id="stage-tools">
+        <button id="btn-box" class="btn-min btn-box" title="拖框多选零件（快捷键 B）">⬚ 框选</button>
         <button id="btn-frame" class="btn-min" title="framing">对准视图</button>
         <label class="check-inline"><input type="checkbox" id="btn-isolate">只看当前图</label>
+        <span id="box-hint" class="hint" hidden>左→右拖 = 窗选（整件在框内）· 右→左拖 = 交叉选（碰到即选）· Shift 加选 · Alt 减选 · 框内被遮挡的零件也会选中</span>
       </div>
     </section>
 
@@ -38,10 +40,12 @@
       <nav id="rtabs">
         <button class="rtab on" data-tab="figures">图纸</button>
         <button class="rtab" data-tab="terms">术语</button>
+        <button class="rtab" data-tab="flows">流程图</button>
         <button class="rtab" data-tab="params">参数</button>
       </nav>
       <section class="rpane" data-pane="figures" id="figures"></section>
       <section class="rpane" data-pane="terms" id="terms" hidden></section>
+      <section class="rpane" data-pane="flows" id="flows" hidden></section>
       <section class="rpane" data-pane="params" id="params" hidden></section>
     </aside>
   </main>

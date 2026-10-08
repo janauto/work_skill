@@ -5,6 +5,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { api } from './api.js';
 import {
   bus, state, figureColor, figuresContaining, resolveMembers, toggleSelect, partNames,
+  setSelection,
 } from './state.js';
 
 const BASE = new THREE.Color('#b9b4a9');       // 未入图：暖灰（纸上铅稿的灰）
@@ -18,6 +19,9 @@ let hovered = null;
 let isolate = false;
 let flashUntil = 0;
 const flashSet = new Set();
+let boxMode = false;
+const samples = new Map();        // 零件名 -> 世界坐标采样点 Float32Array（框选用，载入后算一次）
+const SAMPLE_PER_MESH = 360;
 
 function collectMeshes(rootObj) {
   // GLTFLoader 会给重名对象追加 _1/_2 后缀（同一零件的节点与 mesh 同名也算重名），
@@ -121,6 +125,105 @@ function pick(event) {
   return hits.length ? hits[0].object.userData.part : null;
 }
 
+// ---- 框选（CAD 惯例：左→右窗选，全在框内才选；右→左交叉选，碰到即选）----
+function buildSamples() {
+  samples.clear();
+  scene.updateMatrixWorld(true);
+  const v = new THREE.Vector3();
+  meshesByName.forEach((meshes, name) => {
+    const pts = [];
+    meshes.forEach((m) => {
+      const pos = m.geometry?.attributes?.position;
+      if (!pos) return;
+      const step = Math.max(1, Math.floor(pos.count / SAMPLE_PER_MESH));
+      for (let i = 0; i < pos.count; i += step) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+        pts.push(v.x, v.y, v.z);
+      }
+    });
+    samples.set(name, new Float32Array(pts));
+  });
+}
+
+function partsInRect(r, crossing) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const v = new THREE.Vector3();
+  const hit = [];
+  samples.forEach((pts, name) => {
+    const meshes = meshesByName.get(name) || [];
+    if (!meshes.some((m) => m.visible) || !pts.length) return;
+    let any = false; let all = true;
+    for (let i = 0; i < pts.length; i += 3) {
+      v.set(pts[i], pts[i + 1], pts[i + 2]).project(camera);
+      if (v.z > 1) { all = false; continue; }          // 相机背后
+      const x = (v.x + 1) / 2 * rect.width;
+      const y = (1 - v.y) / 2 * rect.height;
+      const inside = x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1;
+      any = any || inside;
+      all = all && inside;
+      if (crossing && any) break;
+      if (!crossing && !all) break;
+    }
+    if (crossing ? any : all) hit.push(name);
+  });
+  return hit;
+}
+
+export function setBoxMode(on) {
+  boxMode = !!on;
+  if (controls) controls.enabled = !boxMode;
+  const host = renderer?.domElement?.parentElement;
+  if (host) host.classList.toggle('box-mode', boxMode);
+  bus.emit('box-mode', boxMode);
+}
+export const isBoxMode = () => boxMode;
+
+function attachMarquee(container) {
+  const band = document.createElement('div');
+  band.className = 'marquee';
+  band.hidden = true;
+  container.appendChild(band);
+  let start = null;
+  const local = (e) => {
+    const r = renderer.domElement.getBoundingClientRect();
+    return [e.clientX - r.left, e.clientY - r.top];
+  };
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    if (!boxMode || e.button !== 0) return;
+    start = local(e);
+    renderer.domElement.setPointerCapture(e.pointerId);
+    band.hidden = false;
+    Object.assign(band.style, { left: `${start[0]}px`, top: `${start[1]}px`, width: '0px', height: '0px' });
+  });
+  renderer.domElement.addEventListener('pointermove', (e) => {
+    if (!start) return;
+    const [x, y] = local(e);
+    const crossing = x < start[0];
+    band.classList.toggle('crossing', crossing);
+    Object.assign(band.style, {
+      left: `${Math.min(x, start[0])}px`, top: `${Math.min(y, start[1])}px`,
+      width: `${Math.abs(x - start[0])}px`, height: `${Math.abs(y - start[1])}px`,
+    });
+  });
+  renderer.domElement.addEventListener('pointerup', (e) => {
+    if (!start) return;
+    const [x, y] = local(e);
+    const r = { x0: Math.min(x, start[0]), x1: Math.max(x, start[0]),
+      y0: Math.min(y, start[1]), y1: Math.max(y, start[1]) };
+    const crossing = x < start[0];
+    start = null;
+    band.hidden = true;
+    if (r.x1 - r.x0 < 4 || r.y1 - r.y0 < 4) return;   // 太小当作误触
+    const hit = partsInRect(r, crossing);
+    let next;
+    if (e.altKey) next = [...state.selection].filter((n) => !hit.includes(n));
+    else if (e.shiftKey) next = [...new Set([...state.selection, ...hit])];
+    else next = hit;
+    setSelection(next);
+    bus.emit('box-selected', { count: hit.length, crossing });
+  });
+}
+
 export async function initViewer(container) {
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -143,6 +246,8 @@ export async function initViewer(container) {
   scene.add(gltf.scene);
   collectMeshes(gltf.scene);
   frameAll();
+  buildSamples();
+  attachMarquee(container);
 
   const resize = () => {
     const { clientWidth: w, clientHeight: h } = container;
@@ -156,7 +261,7 @@ export async function initViewer(container) {
   let downAt = null;
   renderer.domElement.addEventListener('pointerdown', (e) => { downAt = [e.clientX, e.clientY]; });
   renderer.domElement.addEventListener('pointerup', (e) => {
-    if (!downAt) return;
+    if (!downAt || boxMode) { downAt = null; return; }
     const moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]);
     downAt = null;
     if (moved > 5) return;                    // 拖转视角不算点击
@@ -164,6 +269,7 @@ export async function initViewer(container) {
     if (name) toggleSelect(name);
   });
   renderer.domElement.addEventListener('pointermove', (e) => {
+    if (boxMode && e.buttons) return;
     const name = pick(e);
     if (name !== hovered) {
       hovered = name;
@@ -186,6 +292,7 @@ export async function initViewer(container) {
   repaint();   // 初次上色：viewer 在 booted 事件之后才建好，错过了那班车
   const handle = {
     setIsolate(on) { isolate = on; repaint(); frameAll(); },
+    setBoxMode,
     frameAll,
     partCount: meshesByName.size,
     meshesByName, scene, camera,   // 本地调试句柄（单机工具，无隐私面）

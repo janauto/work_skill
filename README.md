@@ -186,7 +186,7 @@ Node.js is only needed for the two scraping skills; cadquery-ocp only for STEP-t
 | [`hifi-comment-tagging`](#3-hifi-comment-tagging) | 单产品的评论、退货、售后归因 | 清洗表、打标表、总结表 |
 | [`product-definition-voc`](#4-product-definition-voc) | 从评论里提炼产品定义所需的洞察 | 需求聚类、Aha moment、场景卡片 |
 | [`dvt-exploded-model-visualizer`](#5-dvt-exploded-model-visualizer) | 把整机 CAD 变成可交互的透视爆炸评审页 | 可交互 HTML、GLB、元数据 |
-| [`patent-drawing-dwg-cleanup`](#6-patent-drawing-dwg-cleanup) | 生成或清理专利附图，交付可编辑 DXF/DWG；含浏览器端人工点标界面 | 全实线 DXF、已审计 DWG、附图标记说明 |
+| [`patent-drawing-dwg-cleanup`](#6-patent-drawing-dwg-cleanup) | 生成或清理专利附图，交付可编辑 DXF/DWG；含多工程 Web 工作台（框选、AI 起名、件号表、流程图、REST/MCP） | 全实线 DXF、已审计 DWG、交底版/递交版、附图标记说明 |
 | [`qwen-patent-review`](qwen-patent-review/SKILL.md) | 千问拉取 GitHub、Web 复核、返回千问完成结构说明图与教程 | 带功能/装配说明和零件表的 DXF/DWG、PNG/PDF、验收记录 |
 
 ### 快速选择
@@ -419,6 +419,25 @@ python3 scripts/plan_studio.py assembly.step        # 自动开浏览器，只�
 ```
 
 3D 视图里点选零件归入图卡、逐行填中文术语（可从 `.xlsx`/`.csv` BOM 批量预填，只填空行、不覆盖人写的）、拖动行序即调整发号顺序，渲染后 SVG 预览里点附图标记数字可高亮对应零件。界面上**不存在**坐标、字高、间距输入框，也没有「跳过 QA」按钮——版面层当初从模型手里收走的理由，对人同样成立。设计与取舍见 [`docs/plan-studio-proposal.md`](patent-drawing-dwg-cleanup/docs/plan-studio-proposal.md)。
+
+**专利附图工作台：多工程 Web 工作流**
+
+把整条链路收进一个本机网页：首页轮播示例附图、管理多个工程；每个工程就是一个 Plan Studio，另加框选、AI 起名、规范标注、流程图和完整导出。
+
+```bash
+python3 scripts/workbench.py          # 默认 http://127.0.0.1:8790/?token=…（token 存在 ~/.config/patent-workbench/）
+```
+
+| 能力 | 说明 |
+| --- | --- |
+| 框选零件 | 3D 视图按 `B` 或点「框选」：左→右窗选（整件在框内）、右→左交叉选（碰到即选），Shift 加选、Alt 减选 |
+| AI 起草零件名 | DeepSeek API（设置页填密钥，0600 本机保存、不回显）；未配密钥时可用本机 CodeBuddy 备用通道。只填空白、不覆盖人填的；把握低的在术语表标红；不同零件撞名自动改「第一/第二」 |
+| 规范标注 | 出图后自动生成**交底版**（图号「图N」＋ 左下角「序号｜名 称」件号表，行多拆双栏）与**递交版**（仅图号），对应命令 `annotate_figure_sheet.py`；表格只放空白处，放不下时放到图形下方并提示 |
+| 方法流程图 | 一段文字 → AI 整理成语义 JSON → `render_flowchart.py` 出图；S101 步骤号、版面、走线（不穿框，回环走外道）全部由程序算，图号接在结构附图之后 |
+| 导出 | ZIP：交底版 / 递交版 DXF + DWG + PNG、流程图、`说明书附图_交底版.docx`（每图一页）、`附图说明.txt`、`reference-numerals.json` |
+| 外部调用 | REST `/v1/*`（文档 `/docs`）与 MCP `POST /mcp`（Bearer token）；千问办公可按 URL 挂载 MCP，在会话里列工程、读零件、写中文名、出图、画流程图 |
+
+工程数据在 `~/.patent-workbench`，**不进 git**——未申请专利的模型和附图一旦公开会破坏新颖性。仓库自带的「示例·合成装配体」可放心公开；真实产品的示例用 `workbench.py seed --step … --plan … --example --render` 在本机生成。
 
 **清理已有附图**
 

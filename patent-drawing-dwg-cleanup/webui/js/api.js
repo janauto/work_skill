@@ -1,5 +1,10 @@
-// 与本机 Plan Studio 服务器的全部通信。token 来自启动时终端打印的 URL。
-const token = new URLSearchParams(location.search).get('token') || '';
+// 与 Plan Studio 服务器的全部通信。路径一律相对：单工程模式挂在 /，工作台里挂在 /p/<id>/。
+// token 来自地址栏 ?token=，存进 sessionStorage，页内跳转后仍可用。
+const fromUrl = new URLSearchParams(location.search).get('token');
+if (fromUrl) { try { sessionStorage.setItem('studio-token', fromUrl); } catch { /* 隐私模式 */ } }
+export const token = fromUrl || (() => {
+  try { return sessionStorage.getItem('studio-token') || ''; } catch { return ''; }
+})();
 
 async function call(method, path, body) {
   const res = await fetch(path, {
@@ -32,13 +37,28 @@ async function upload(path, file) {
   return res.json();
 }
 
+// 服务器返回的预览地址形如 /api/preview/x.svg —— 去掉开头的 / 变成相对路径
+const rel = (p) => (p || '').replace(/^\//, '');
+const withToken = (p) => `${rel(p)}${p.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+
 export const api = {
-  state: () => call('GET', '/api/state'),
-  importBom: (file) => upload('/api/bom', file),
-  savePlan: (plan) => call('PUT', '/api/plan', { plan }),
-  render: () => call('POST', '/api/render'),
-  renderStatus: () => call('GET', '/api/render/status'),
-  exportAll: (dwg) => call('POST', '/api/export', { dwg }),
-  modelUrl: () => `/api/model.glb?token=${encodeURIComponent(token)}`,
-  previewUrl: (p) => `${p}?token=${encodeURIComponent(token)}`,
+  state: () => call('GET', 'api/state'),
+  importBom: (file) => upload('api/bom', file),
+  savePlan: (plan) => call('PUT', 'api/plan', { plan }),
+  render: () => call('POST', 'api/render'),
+  renderStatus: () => call('GET', 'api/render/status'),
+  exportAll: (dwg) => call('POST', 'api/export', { dwg }),
+  exportUrl: (zip) => withToken(`api/export-file/${zip}`),
+  modelUrl: () => withToken('api/model.glb'),
+  previewUrl: (p) => withToken(p),
+  // AI
+  llmStatus: () => call('GET', 'api/llm/status'),
+  draftTerms: (opts) => call('POST', 'api/llm/draft-terms', opts || { apply: true }),
+  // 流程图
+  flowcharts: () => call('GET', 'api/flowcharts'),
+  newFlowchart: (spec) => call('POST', 'api/flowcharts', spec ? { spec } : {}),
+  saveFlowchart: (id, spec) => call('PUT', `api/flowcharts/${id}`, { spec }),
+  renderFlowchart: (id) => call('POST', `api/flowcharts/${id}/render`),
+  deleteFlowchart: (id) => call('DELETE', `api/flowcharts/${id}`),
+  aiFlowchart: (text, title, id) => call('POST', 'api/flowcharts-ai', { text, title, id }),
 };
