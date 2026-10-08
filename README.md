@@ -425,8 +425,11 @@ python3 scripts/plan_studio.py assembly.step        # 自动开浏览器，只�
 把整条链路收进一个本机网页：首页轮播示例附图、管理多个工程；每个工程就是一个 Plan Studio，另加框选、AI 起名、规范标注、流程图和完整导出。
 
 ```bash
+python3 -m pip install fastapi uvicorn openpyxl httpx python-docx   # httpx 走 DeepSeek；python-docx 出 Word，缺了只少一个文件
 python3 scripts/workbench.py          # 默认 http://127.0.0.1:8790/?token=…（token 存在 ~/.config/patent-workbench/）
 ```
+
+剖视图（如需半剖露出内啮合）目前不在工作台能力内，仍需走单独的 OCC 剖切脚本。
 
 | 能力 | 说明 |
 | --- | --- |
