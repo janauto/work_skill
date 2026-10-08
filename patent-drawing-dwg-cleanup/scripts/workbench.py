@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import os
 import base64
 import json
 import re
@@ -760,9 +761,26 @@ def ensure_synthetic(reg: Registry) -> None:
                plan=SYNTHETIC_PLAN, flowcharts={"flow1": SYNTHETIC_FLOW})
 
 
+def _work_in(path: Path) -> None:
+    """把进程工作目录切到数据目录。
+
+    从 iCloud 等受保护目录启动时，进程的 cwd 不可读：httpx 导入 rich 时的 os.getcwd()、
+    shutil.make_archive 都会直接抛 PermissionError（实测 DeepSeek 通道因此 500）。
+    数据目录一定可读写，切过去后与从哪里启动无关。"""
+    try:
+        os.chdir(str(path))
+    except OSError:
+        pass
+
+
 def cmd_seed(args) -> int:
+    for key in ("step", "plan", "glossary"):
+        if getattr(args, key):
+            setattr(args, key, os.path.abspath(os.path.expanduser(getattr(args, key))))
+    args.flow = [os.path.abspath(os.path.expanduser(f)) for f in (args.flow or [])]
     token = ensure_token()
     reg = Registry(Path(args.data).expanduser(), token)
+    _work_in(reg.data)
     plan = json.loads(Path(args.plan).read_text(encoding="utf-8")) if args.plan else None
     glossary = load_glossary(Path(args.glossary)) if args.glossary else None
     flows = {}
@@ -815,6 +833,7 @@ def main(argv=None) -> int:
     port = getattr(args, "port", DEFAULT_PORT)
     token = ensure_token()
     reg = Registry(Path(args.data).expanduser(), token)
+    _work_in(reg.data)
     if not getattr(args, "no_example", False):
         ensure_synthetic(reg)
     app = Dispatcher(build_workbench(reg, token, port), reg)

@@ -774,6 +774,11 @@ def main() -> int:
         return 1
 
     ws = Workspace(args.step, args.workdir)
+    try:   # cwd 不可读（如从 iCloud 目录启动）时 httpx/rich 等库的 os.getcwd() 会抛错
+        import os
+        os.chdir(str(ws.root))
+    except OSError:
+        pass
     prepare(ws)
     token = args.token or secrets.token_urlsafe(16)
     url = "http://127.0.0.1:%d/?token=%s" % (args.port, token)
