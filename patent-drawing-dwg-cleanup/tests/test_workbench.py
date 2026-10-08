@@ -34,6 +34,7 @@ def _isolated_config(tmp_path, monkeypatch):
     monkeypatch.setattr(L, "CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.setattr(L, "CONFIG_FILE", tmp_path / "cfg" / "config.json")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(L, "_codebuddy_path", lambda: None)   # 测试绝不调用真实大模型
     monkeypatch.setenv("WORKBENCH_TOKEN", "t0k")
 
 
@@ -196,3 +197,77 @@ def test_compound_names_for_one_part_are_collapsed(monkeypatch):
         {"selector": "SEAT", "term": "第一阀座、第二阀座", "label": "once", "confidence": "high"}]})
     rows = L.draft_terms({"parts": [{"name": "SEAT", "bbox_size": [50, 8, 50]}]}, {"terms": []})
     assert rows[0]["term"] == "阀座" and rows[0]["confidence"] == "low"
+
+
+# ----------------------------------------------------------------- 结构识别
+
+_ASM = {"parts": [
+    {"name": "BREP_1", "max_dim": 60, "bbox_size": [60, 60, 20], "path_sample": "ROOT/TOP_ASM/BREP_1"},
+    {"name": "BREP_2", "max_dim": 30, "bbox_size": [30, 30, 10], "path_sample": "ROOT/TOP_ASM/BREP_2"},
+    {"name": "PRT_9", "max_dim": 50, "bbox_size": [50, 50, 50], "path_sample": "ROOT/BASE_ASM/PRT_9"},
+    {"name": "PRT_10", "max_dim": 40, "bbox_size": [40, 40, 4], "path_sample": "ROOT/BASE_ASM/PRT_10"},
+    {"name": "TRAY", "max_dim": 140, "bbox_size": [140, 20, 120], "path_sample": "ROOT/TRAY"},
+    {"name": "GHOST", "degenerate": True, "max_dim": 0, "path_sample": "ROOT/GHOST"},
+]}
+_PLAN = {"terms": [{"selector": "PRT_9", "term": "底座"}], "source": {"exclude": ["TRAY"]}}
+
+
+def test_clean_structure_places_every_part_once_and_respects_plan():
+    raw = {"groups": [{"name": "顶部风扇结构", "role": "顶部散热", "parts": ["BREP_1", "BREP_2", "PRT_9"]},
+                      {"name": "主体结构", "role": "", "parts": ["PRT_9", "TRAY", "NOPE"]}],
+           "parts": {"BREP_1": {"name": "壳体"}, "BREP_2": {"name": "壳体"},
+                     "PRT_9": {"name": "机座"}, "PRT_10": {"name": "PCB板"}}}
+    s = L.clean_structure(raw, _ASM, _PLAN, source="ai")
+    placed = [n for g in s["groups"] for n in g["parts"]]
+    assert sorted(placed) == ["BREP_1", "BREP_2", "PRT_10", "PRT_9"]        # 排除件、退化件不在
+    assert len(placed) == len(set(placed))                                   # 每件只在一组
+    assert s["groups"][-1]["name"] == "其他零件" and s["groups"][-1]["parts"] == ["PRT_10"]
+    assert s["names"]["PRT_9"]["name"] == "底座"                             # 人工名称优先
+    assert {s["names"]["BREP_1"]["name"], s["names"]["BREP_2"]["name"]} == {"第一壳体", "第二壳体"}
+    assert "PRT_10" not in s["names"]                                        # 含字母的名字丢弃
+
+
+def test_fallback_structure_groups_by_assembly_path():
+    s = L.fallback_structure(_ASM, _PLAN)
+    assert s["source"] == "fallback"
+    assert [sorted(g["parts"]) for g in s["groups"]] == [["BREP_1", "BREP_2"], ["PRT_10", "PRT_9"]]
+
+
+@pytest.mark.skipif(not _HAS_OCP, reason="需要 cadquery-ocp 才能从 STEP 准备工程")
+def test_structure_snapshot_and_showcase_endpoints(tmp_path, monkeypatch):
+    import workbench as W
+    from starlette.testclient import TestClient
+
+    reg = W.Registry(tmp_path / "data", "t0k")
+    W.ensure_synthetic(reg)
+    t0 = time.time()
+    while reg.get("example-synthetic").meta.get("status") != "ready" or \
+            reg.get("example-synthetic").meta.get("message"):
+        assert time.time() - t0 < 300
+        time.sleep(1)
+    c = TestClient(W.Dispatcher(W.build_workbench(reg, "t0k", 8790), reg),
+                   base_url="http://127.0.0.1:8790")
+    H = {"Authorization": "Bearer t0k"}
+    st = c.get("/p/example-synthetic/api/structure", headers=H).json()
+    assert st["structure"]["source"] == "fallback" and st["structure"]["groups"]
+    # 展示图：只收 PNG，名字受限
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+    assert c.post("/p/example-synthetic/api/snapshot?name=../x", headers=H, content=png).status_code == 422
+    assert c.post("/p/example-synthetic/api/snapshot?name=xray", headers=H, content=b"GIF89a").status_code == 422
+    assert c.post("/p/example-synthetic/api/snapshot?name=xray", headers=H, content=png).json()["name"] == "xray.png"
+    assert c.get("/files/example-synthetic/snap/xray.png", headers=H).status_code == 200
+    # 首页展示：没有 AI 结构时不出结构卡，但出图成果照常挑选
+    sc = c.get("/api/wb/showcase", headers=H).json()
+    assert sc["structure"] is None
+    assert sc["pick"]["full"]["number"] == 1 and sc["pick"]["flow"]["steps"] >= 1
+    # 写入一份 AI 结构后，结构卡与展示图都会出现
+    ws = reg.get("example-synthetic").workspace()
+    raw = {"groups": [{"name": "回转组件", "role": "中部", "parts": ["SYN-B02", "SYN-C03"]}],
+           "parts": {"SYN-B02": {"name": "回转座"}}}
+    asm = json.loads(ws.assembly.read_text(encoding="utf-8"))
+    plan = json.loads(ws.plan.read_text(encoding="utf-8"))
+    (ws.root / "structure.json").write_text(json.dumps(
+        L.clean_structure(raw, asm, plan, source="ai"), ensure_ascii=False), encoding="utf-8")
+    sc = c.get("/api/wb/showcase", headers=H).json()
+    assert sc["structure"]["groups"][0]["name"] == "回转组件"
+    assert sc["structure"]["snaps"]["xray"].endswith("/snap/xray.png")

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import ezdxf
 import pytest
+from ezdxf import bbox as _bbox
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _ROOT / "scripts"
@@ -110,6 +111,23 @@ def test_dxf_is_continuous_and_deterministic(tmp_path):
 def test_everything_fits_the_usable_area(tmp_path):
     out = tmp_path / "f.dxf"
     FC.write(SPEC, out, figure_number=1)
-    ext = ezdxf.bbox.extents(ezdxf.readfile(str(out)).modelspace())
+    ext = _bbox.extents(ezdxf.readfile(str(out)).modelspace())
     assert ext.extmin.x >= -0.5 and ext.extmax.x <= FC.FRAME_W + 0.5
     assert ext.extmin.y >= -0.5 and ext.extmax.y <= FC.FRAME_H + 0.5
+
+
+def test_long_flow_keeps_text_inside_boxes_and_warns(tmp_path):
+    """步骤很多时不再「文字保底、框照缩」：整图按字高下限等比缩放，放不下就如实告警。"""
+    n = 16
+    nodes = [{"id": "s", "kind": "start", "text": "开始"}]
+    nodes += [{"id": "p%d" % i, "kind": "process", "text": "第%d道工序：检测并记录工件状态" % i}
+              for i in range(n)]
+    nodes += [{"id": "e", "kind": "end", "text": "结束"}]
+    ids = [x["id"] for x in nodes]
+    spec = {"schema": FC.SCHEMA, "title": "长流程",
+            "nodes": nodes, "edges": [{"from": a, "to": b} for a, b in zip(ids, ids[1:])]}
+    sol = FC.solve(spec)
+    assert sol.scale >= FC.TEXT_FLOOR_MM / FC.TEXT_H - 1e-9
+    assert sol.warnings and "拆" in sol.warnings[0]
+    res = FC.write(spec, tmp_path / "long.dxf", figure_number=3)
+    assert res["text_height_mm"] >= FC.TEXT_FLOOR_MM

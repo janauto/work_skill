@@ -292,3 +292,58 @@ def _docx(pngs: List[Path], path: Path) -> None:
         if i < len(pngs) - 1:
             doc.add_page_break()
     doc.save(str(path))
+
+
+# --------------------------------------------------------------------------- #
+# 结构识别：给人看的结构组 + 零件中文显示名（只存 structure.json，不进 plan）       #
+# --------------------------------------------------------------------------- #
+
+def structure_file(ws) -> Path:
+    return ws.root / "structure.json"
+
+
+def load_structure(ws) -> dict:
+    """AI 结果优先；没有就按装配层级兜底分组。新出现的零件补进「其他零件」。"""
+    import workbench_llm
+    asm = _load(ws.assembly, {}) or {}
+    plan = _load(ws.plan, {}) or {}
+    data = _load(structure_file(ws), None)
+    if not (isinstance(data, dict) and data.get("groups")):
+        return workbench_llm.fallback_structure(asm, plan)
+    skip = workbench_llm.excluded_by_plan(plan)
+    known = {p["name"] for p in asm.get("parts", [])
+             if not p.get("degenerate") and not skip(p["name"])}
+    placed = {n for g in data["groups"] for n in g.get("parts", [])}
+    missing = sorted(known - placed)
+    if missing:
+        other = next((g for g in data["groups"] if g.get("name") == "其他零件"), None)
+        if other is None:
+            other = {"id": "g%d" % (len(data["groups"]) + 1), "name": "其他零件",
+                     "role": "识别之后新出现的零件", "parts": []}
+            data["groups"].append(other)
+        other["parts"] += missing
+    for g in data["groups"]:
+        g["parts"] = [n for n in g.get("parts", []) if n in known]
+    data["groups"] = [g for g in data["groups"] if g["parts"]]
+    return data
+
+
+def rename_groups(ws, edits: List[dict]) -> dict:
+    data = load_structure(ws)
+    by_id = {g["id"]: g for g in data["groups"]}
+    for e in edits:
+        g = by_id.get(e.get("id"))
+        if not g:
+            continue
+        if str(e.get("name", "")).strip():
+            g["name"] = str(e["name"]).strip()[:20]
+        if "role" in e:
+            g["role"] = str(e.get("role") or "").strip()[:60]
+    _dump(structure_file(ws), data)
+    return data
+
+
+def name_rows(ws) -> List[dict]:
+    data = load_structure(ws)
+    return [{"selector": n, "term": v.get("name", ""), "label": "once"}
+            for n, v in (data.get("names") or {}).items() if v.get("name")]

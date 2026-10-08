@@ -383,6 +383,8 @@ async def _run_sync(fn):
 def build_app(ws: Workspace, token: str, home_url: str | None = None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     render_lock = threading.Lock()
+    structure_lock = threading.Lock()
+    structure_job: dict = {"running": False, "started": None, "error": None, "finished": None}
     render_state: dict = {"running": False, "result": None, "started": None}
     try:
         render_state["result"] = json.loads((ws.root / "last_render.json").read_text(encoding="utf-8"))
@@ -445,6 +447,8 @@ def build_app(ws: Workspace, token: str, home_url: str | None = None) -> FastAPI
             "home_url": home_url,
             "flowcharts": studio_ext.list_flowcharts(ws),
             "llm": _llm_status(),
+            "structure": studio_ext.load_structure(ws),
+            "structure_job": dict(structure_job),
         }
 
     @app.put("/api/plan")
@@ -715,6 +719,70 @@ def build_app(ws: Workspace, token: str, home_url: str | None = None) -> FastAPI
         return {"id": fid, "spec": spec, **saved, "result": res,
                 "flowcharts": studio_ext.list_flowcharts(ws)}
 
+    # ---- 展示图（3D 视图截图，首页功能介绍用） ---------------------------------
+
+    @app.post("/api/snapshot")
+    async def snapshot(request: Request):
+        name = (request.query_params.get("name") or "view").strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,31}", name):
+            raise HTTPException(422, "名字只能用小写字母、数字、连字符")
+        data = await request.body()
+        if not data.startswith(b"\x89PNG") or len(data) > 20 * 1024 * 1024:
+            raise HTTPException(422, "不是 PNG 图片或过大")
+        path = ws.root / "snapshots" / (name + ".png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return {"name": path.name, "bytes": len(data)}
+
+    # ---- 结构识别 -------------------------------------------------------------
+
+    def structure_job_run() -> None:
+        import workbench_llm
+        try:
+            data = workbench_llm.analyze_structure(
+                load_json(ws.assembly), load_json(ws.plan),
+                glossary=studio_ext.glossary_of(ws), bom=studio_ext.bom_names_of(ws))
+            studio_ext.structure_file(ws).write_text(
+                json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+            structure_job["error"] = None
+        except Exception as exc:  # 交给前端显示，不吞
+            structure_job["error"] = str(exc)
+        finally:
+            structure_job["running"] = False
+            structure_job["finished"] = time.strftime("%H:%M:%S")
+            structure_lock.release()
+
+    def start_structure() -> bool:
+        if not structure_lock.acquire(blocking=False):
+            return False
+        structure_job.update(running=True, started=time.strftime("%H:%M:%S"), error=None)
+        threading.Thread(target=structure_job_run, daemon=True).start()
+        return True
+
+    @app.get("/api/structure")
+    def structure_get():
+        return {"structure": studio_ext.load_structure(ws), "job": dict(structure_job)}
+
+    @app.post("/api/structure/analyze")
+    def structure_analyze():
+        if _llm_status().get("provider") in (None, "none"):
+            raise HTTPException(409, "没有可用的大模型通道：请在工作台设置里填 DeepSeek 密钥")
+        start_structure()
+        return {"job": dict(structure_job)}
+
+    @app.put("/api/structure")
+    async def structure_put(request: Request):
+        body = await request.json()
+        return {"structure": studio_ext.rename_groups(ws, body.get("groups") or [])}
+
+    @app.post("/api/structure/apply-names")
+    async def structure_apply(request: Request):
+        body = await request.json()
+        applied = studio_ext.apply_terms(ws, studio_ext.name_rows(ws),
+                                         overwrite=bool(body.get("overwrite")))
+        return {"applied": {k: v for k, v in applied.items() if k != "plan"},
+                "plan": applied["plan"], "validate": validate_now()}
+
     # ---- AI 起草术语 ----------------------------------------------------------
 
     @app.get("/api/llm/status")
@@ -749,7 +817,8 @@ def build_app(ws: Workspace, token: str, home_url: str | None = None) -> FastAPI
 
     app.state.studio = SimpleNamespace(
         ws=ws, render_and_wait=render_and_wait, render_state=render_state,
-        validate_now=validate_now, export_now=export_now, start_render=start_render)
+        validate_now=validate_now, export_now=export_now, start_render=start_render,
+        start_structure=start_structure, structure_job=structure_job)
 
     app.mount("/", StaticFiles(directory=str(WEBUI), html=True), name="webui")
     return app

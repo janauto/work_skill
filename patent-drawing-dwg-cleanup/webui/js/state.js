@@ -24,7 +24,41 @@ export const state = {
   flowcharts: [],       // 本工程的流程图
   aiBusy: false,
   aiSuggestions: {},    // selector -> {term, confidence, reason}
+  structure: null,      // {source: ai|fallback, groups:[{id,name,role,parts}], names:{part:{name}}}
+  structureJob: null,   // AI 识别进度
+  partsMode: 'structure',
+  collapsed: new Set(), // 折叠的结构组 id
+  // 3D 观察参数：只影响看与选，不进 plan、不影响出图
+  view: {
+    opacity: 1, explode: 0, explodeMode: 'group', colorBy: 'figure',
+    hiddenGroups: new Set(), soloGroup: null,
+  },
 };
+
+// ---- 结构组与显示名 ----
+export const STRUCT_COLORS = [
+  '#2c7fb8', '#c8552c', '#7a9a01', '#8e5ba6', '#d09a00',
+  '#0d8a8a', '#b04a76', '#5b6ee1', '#946b3d', '#6b6b6b',
+];
+let groupIndex = new Map();
+export function indexStructure() {
+  groupIndex = new Map();
+  (state.structure?.groups || []).forEach((g) => g.parts.forEach((n) => groupIndex.set(n, g)));
+}
+export const groupOf = (name) => groupIndex.get(name) || null;
+export function groupColor(gid) {
+  const idx = (state.structure?.groups || []).findIndex((g) => g.id === gid);
+  return STRUCT_COLORS[(idx < 0 ? 0 : idx) % STRUCT_COLORS.length];
+}
+export const aiName = (name) => state.structure?.names?.[name]?.name || '';
+export function displayName(name) {
+  const t = termFor(name);
+  return (t?.term || '').trim() || aiName(name);
+}
+export function setView(patch) {
+  Object.assign(state.view, patch);
+  bus.emit('view');
+}
 
 // 图的着色板：晒图纸上的彩铅色，区分度优先，固定顺序保证同一张图颜色稳定。
 export const FIGURE_COLORS = [
@@ -155,6 +189,13 @@ export async function boot() {
     new URLSearchParams(location.search).get('token') || '')}` : null;
   state.llm = data.llm || null;
   state.flowcharts = data.flowcharts || [];
+  state.structure = data.structure || null;
+  state.structureJob = data.structure_job || null;
+  indexStructure();
+  if (state.structure?.source === 'ai') state.view.colorBy = 'structure';
+  const groups = state.structure?.groups || [];
+  const total = groups.reduce((n, g) => n + g.parts.length, 0);
+  groups.forEach((g) => { if (total > 40 && g.parts.length > 12) state.collapsed.add(g.id); });
   state.activeFigure = data.plan?.figures?.[0]?.id || null;
   bus.emit('booted');
 }

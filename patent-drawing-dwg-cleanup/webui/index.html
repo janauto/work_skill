@@ -24,6 +24,18 @@
     </aside>
 
     <section id="stage">
+      <div id="view-tools">
+        <label class="vt" title="选中的零件始终实心；没选中时作用于全部零件">透明度
+          <input type="range" id="v-opacity" min="10" max="100" step="5" value="100"><output id="v-opacity-out">100%</output></label>
+        <label class="vt" title="只影响 3D 观察，不影响出图">爆炸
+          <input type="range" id="v-explode" min="0" max="100" step="2" value="0"><output id="v-explode-out">0%</output></label>
+        <select id="v-mode" title="爆炸方式">
+          <option value="group">按结构拉开</option><option value="radial">逐件径向</option><option value="axis">沿主轴</option></select>
+        <select id="v-color" title="着色方式">
+          <option value="structure">按结构着色</option><option value="figure">按图纸着色</option></select>
+        <button id="v-reset" class="btn-min" title="透明度、爆炸、隐藏全部复位">复位</button>
+        <button id="v-snap" class="btn-min" title="把当前 3D 视图存成图片，工作台首页的功能介绍会用它">存为展示图</button>
+      </div>
       <div id="viewport">
         <i class="reg reg-tl"></i><i class="reg reg-tr"></i>
         <i class="reg reg-bl"></i><i class="reg reg-br"></i>

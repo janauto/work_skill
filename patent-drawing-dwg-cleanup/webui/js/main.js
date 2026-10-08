@@ -1,6 +1,6 @@
 // 装配入口：布局、工具条、键盘、右栏页签、校验问题面板、框选开关、AI 起草。
 import {
-  boot, bus, state, setSelection, flush,
+  boot, bus, state, setSelection, flush, setView,
 } from './state.js';
 import { api } from './api.js';
 import { initViewer, setBoxMode, isBoxMode } from './viewer.js';
@@ -114,6 +114,40 @@ function syncBoxButton() {
   $('#box-hint').hidden = !isBoxMode();
 }
 
+function initViewTools(viewer) {
+  const op = $('#v-opacity'); const ex = $('#v-explode');
+  const mode = $('#v-mode'); const col = $('#v-color');
+  const sync = () => {
+    op.value = Math.round(state.view.opacity * 100);
+    $('#v-opacity-out').textContent = `${op.value}%`;
+    ex.value = Math.round(state.view.explode * 100);
+    $('#v-explode-out').textContent = `${ex.value}%`;
+    mode.value = state.view.explodeMode;
+    col.value = state.view.colorBy;
+  };
+  op.addEventListener('input', () => setView({ opacity: Number(op.value) / 100 }));
+  ex.addEventListener('input', () => setView({ explode: Number(ex.value) / 100 }));
+  ex.addEventListener('change', () => viewer.frameAll());
+  mode.addEventListener('change', () => { setView({ explodeMode: mode.value }); viewer.frameAll(); });
+  col.addEventListener('change', () => setView({ colorBy: col.value }));
+  $('#v-reset').addEventListener('click', () => {
+    setView({ opacity: 1, explode: 0, hiddenGroups: new Set(), soloGroup: null });
+    viewer.frameAll();
+  });
+  $('#v-snap').addEventListener('click', async () => {
+    const v = state.view;
+    const guess = v.explode > 0.05 ? 'explode' : (v.opacity < 0.95 || state.selection.size ? 'xray' : 'view');
+    const name = window.prompt('存为展示图的名字（explode=爆炸视图，xray=透明看内部，其他名字也可以）', guess);
+    if (!name) return;
+    try {
+      const res = await api.snapshot(name.trim(), viewer.snapshot());
+      toast(`已保存展示图 ${res.name}（${Math.round(res.bytes / 1024)} KB），工作台首页会用到`, 'ok');
+    } catch (err) { toast('保存失败：' + err.message, 'bad'); }
+  });
+  bus.on('view', sync);
+  sync();
+}
+
 function initKeyboard() {
   document.addEventListener('keydown', (e) => {
     if (e.target.matches('input, select, textarea')) return;
@@ -158,6 +192,7 @@ async function start() {
       + (count ? '——在图卡上点「加入所选」或按数字键 1–9 归入对应的图' : ''));
   });
   syncBoxButton();
+  initViewTools(viewer);
 
   ['save-state', 'validate', 'booted'].forEach((evt) => bus.on(evt, () => {
     renderToolbar(); renderIssues();

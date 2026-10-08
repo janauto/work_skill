@@ -82,6 +82,49 @@ function initCarousel() {
   if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) timer = requestAnimationFrame(tick);
 }
 
+// ---------------------------------------------------------------- 功能介绍卡片（静态图，取自本机示例工程）
+const withToken = (u) => `${u}${u.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+const studioUrl = (pid) => `/p/${pid}/?token=${encodeURIComponent(token)}`;
+const SC_COLORS = ['#2c7fb8', '#c8552c', '#7a9a01', '#8e5ba6', '#d09a00',
+  '#0d8a8a', '#b04a76', '#5b6ee1', '#946b3d', '#6b6b6b'];
+
+function imgCard(card, src, href, meta, emptyText) {
+  card.querySelectorAll('.sc-meta').forEach((m) => m.remove());
+  const box = $('.sc-img', card);
+  if (!src) { box.innerHTML = `<p class="sc-hint">${emptyText}</p>`; return; }
+  box.innerHTML = `<a href="${href}"><img src="${withToken(src)}" alt="${esc(meta)}" loading="lazy"></a>`;
+  card.insertAdjacentHTML('beforeend', `<p class="sc-meta">${esc(meta)}</p>`);
+}
+
+async function loadShowcase() {
+  const data = await call('GET', '/api/wb/showcase');
+  document.querySelectorAll('[data-slot]').forEach((card) => {
+    const it = data.pick[card.dataset.slot];
+    const which = card.dataset.slot;
+    const src = it && (which === 'filing' ? it.filing : (it.annotated || it.src));
+    const label = it ? (it.number ? `图${it.number}` : (it.label || '')) : '';
+    imgCard(card, src, it ? studioUrl(it.project) : '#',
+      it ? `${it.project_title} · ${label} ${it.caption || ''}` : '', '示例工程出图后，这里展示我们自己模型的成果');
+  });
+  const st = data.structure;
+  if (!st) {
+    $('#struct-list').innerHTML = '<p class="sc-hint">示例工程完成 AI 结构识别后，这里展示看得懂的结构组</p>';
+  } else {
+    $('#struct-sub').textContent = `${st.project_title}：${st.total} 个零件归成 ${st.groups.length} 个结构组`;
+    $('#struct-list').innerHTML = st.groups.map((g, i) => `
+      <a class="sg-row" style="--g:${SC_COLORS[i % SC_COLORS.length]}" href="${studioUrl(st.project)}">
+        <header><b>${esc(g.name)}</b><em>${g.count} 件</em></header>
+        <p>${esc(g.sample.join('、'))}${g.count > g.sample.length ? '…' : ''}</p>
+        ${g.code ? `<code>${esc(g.code.code)} → <b>${esc(g.code.name)}</b></code>` : ''}
+      </a>`).join('');
+  }
+  document.querySelectorAll('[data-snap]').forEach((card) => {
+    const src = st?.snaps?.[card.dataset.snap];
+    imgCard(card, src, st ? studioUrl(st.project) : '#', st ? `${st.project_title} · 规划台 3D 视图` : '',
+      '在规划台里调好透明度或爆炸后点「存为展示图」，这里就会显示');
+  });
+}
+
 // ---------------------------------------------------------------- 工程
 let pollTimer = null;
 const STATUS = { ready: '就绪', preparing: '准备中…', error: '失败' };
@@ -134,6 +177,7 @@ async function loadProjects() {
 async function refreshAll() {
   await loadProjects();
   await loadCarousel();
+  await loadShowcase();
 }
 
 async function create(file, path) {

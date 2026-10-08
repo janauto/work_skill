@@ -54,6 +54,18 @@ export const api = {
   // AI
   llmStatus: () => call('GET', 'api/llm/status'),
   draftTerms: (opts) => call('POST', 'api/llm/draft-terms', opts || { apply: true }),
+  snapshot: async (name, dataUrl) => {
+    const blob = await (await fetch(dataUrl)).blob();
+    const res = await fetch(`api/snapshot?name=${encodeURIComponent(name)}&token=${encodeURIComponent(token)}`,
+      { method: 'POST', headers: { 'X-Studio-Token': token }, body: blob });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+    return res.json();
+  },
+  // 结构识别
+  structure: () => call('GET', 'api/structure'),
+  analyzeStructure: () => call('POST', 'api/structure/analyze'),
+  renameGroups: (groups) => call('PUT', 'api/structure', { groups }),
+  applyStructureNames: (overwrite) => call('POST', 'api/structure/apply-names', { overwrite: !!overwrite }),
   // 流程图
   flowcharts: () => call('GET', 'api/flowcharts'),
   newFlowchart: (spec) => call('POST', 'api/flowcharts', spec ? { spec } : {}),

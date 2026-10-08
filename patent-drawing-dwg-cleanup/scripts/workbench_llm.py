@@ -30,7 +30,8 @@ CODEBUDDY_CANDIDATES = (
     "codebuddy",
 )
 CODEBUDDY_MODEL = "deepseek-v3-2-volc"
-TIMEOUT_S = 180
+TIMEOUT_S = 300
+MAX_OUTPUT_TOKENS = 64000
 
 
 class LLMError(RuntimeError):
@@ -130,7 +131,7 @@ def _parse_json(text: str) -> Any:
             raise LLMError("模型返回的 JSON 无法解析：%s" % exc)
 
 
-def chat_json(system: str, user: str, *, max_tokens: int = 4000,
+def chat_json(system: str, user: str, *, max_tokens: int = 12000,
               cfg: Optional[dict] = None) -> Any:
     s = settings(cfg)
     if s["provider"] == "deepseek":
@@ -147,7 +148,10 @@ def chat_json(system: str, user: str, *, max_tokens: int = 4000,
             "stream": False,
         }
         last = None
-        for attempt in range(3):
+        repaired = False
+        limit = max_tokens
+        for attempt in range(4):
+            body["max_tokens"] = limit
             try:
                 r = httpx.post(s["base_url"] + "/chat/completions", json=body, timeout=TIMEOUT_S,
                                headers={"Authorization": "Bearer " + s["api_key"]})
@@ -163,8 +167,28 @@ def chat_json(system: str, user: str, *, max_tokens: int = 4000,
                 raise LLMError("DeepSeek 拒绝了密钥（401）——请在设置里核对")
             if r.status_code >= 400:
                 raise LLMError("DeepSeek 返回 %d：%s" % (r.status_code, r.text[:300]))
-            content = r.json()["choices"][0]["message"]["content"]
-            return _parse_json(content)
+            choice = r.json()["choices"][0]
+            content = (choice.get("message") or {}).get("content") or ""
+            if not content.strip() and choice.get("finish_reason") == "length":
+                # 推理模型（如 deepseek-v4-pro）的思考过程也占输出额度：额度耗尽时正文为空。
+                if limit >= MAX_OUTPUT_TOKENS:
+                    raise LLMError("模型推理用完了 %d 输出额度仍未给出结果——可在设置里换成更快的模型"
+                                   "（如 deepseek-v4-flash / deepseek-chat）" % limit)
+                limit = min(MAX_OUTPUT_TOKENS, limit * 3)
+                last = "输出额度不足，已放大到 %d 重试" % limit
+                continue
+            try:
+                return _parse_json(content)
+            except LLMError as exc:
+                if repaired:
+                    raise
+                repaired = True   # 只修一次：把解析错误原样回给模型，让它重出完整 JSON
+                body["messages"] = body["messages"][:2] + [
+                    {"role": "assistant", "content": content[:20000]},
+                    {"role": "user", "content": "上面的输出不是合法 JSON（%s）。请重新输出完整、合法的 JSON，"
+                                                "不要省略任何内容，不要解释。" % exc}]
+                last = str(exc)
+                continue
         raise LLMError(last or "DeepSeek 调用失败")
     if s["provider"] == "codebuddy":
         exe = s["codebuddy"]
@@ -226,7 +250,7 @@ def draft_terms(assembly: dict, plan: dict, *, glossary: Optional[Dict[str, str]
         "术语库（已递交专利用过的名字）": glossary or {},
         "BOM 匹配到的物料名称": bom or {},
     }
-    out = chat_json(TERMS_SYSTEM, json.dumps(user, ensure_ascii=False), max_tokens=6000, cfg=cfg)
+    out = chat_json(TERMS_SYSTEM, json.dumps(user, ensure_ascii=False), max_tokens=16000, cfg=cfg)
     rows = out.get("terms", []) if isinstance(out, dict) else []
     names = {p["name"] for p in todo}
     size = {p["name"]: max([float(v) for v in (p.get("bbox_size") or [0])]) for p in todo}
@@ -297,7 +321,7 @@ FLOW_SYSTEM = """你是中国专利代理人，把一段方法描述整理成专
 def flowchart_from_text(text: str, title: str = "", *, cfg: Optional[dict] = None,
                         validate=None) -> dict:
     user = "方法描述：\n%s\n\n%s" % (text.strip(), ("图名：" + title) if title else "")
-    spec = chat_json(FLOW_SYSTEM, user, max_tokens=4000, cfg=cfg)
+    spec = chat_json(FLOW_SYSTEM, user, max_tokens=12000, cfg=cfg)
     if not isinstance(spec, dict):
         raise LLMError("模型返回的不是 JSON 对象")
     spec = _clean_flow(spec, title)
@@ -329,3 +353,132 @@ def _clean_flow(spec: dict, title: str) -> dict:
     return {"schema": "patent-flowchart/1",
             "title": title or str(spec.get("title", "")) or "方法流程图",
             "nodes": nodes, "edges": edges}
+
+
+# --------------------------------------------------------------------------- #
+# 任务三：结构识别（给人看的结构组 + 零件中文显示名）                              #
+# --------------------------------------------------------------------------- #
+
+STRUCT_SYSTEM = """你是资深结构工程师兼专利代理人。下面是一台产品 3D 装配体的零件清单：零件名多是看不懂的 CAD 代号，
+附有包围盒尺寸（mm）、中心坐标（mm）、装配路径、实例数，以及整机包围盒。请把零件划成用户一眼能看懂的「结构组」，
+并给每个零件起一个中文显示名，方便用户在 3D 里按结构挑选、框选要申请专利的部分。
+规则：
+1. 结构组 3–10 个，按功能与位置划分，例如「顶盖与按键组件」「风扇散热结构」「主体外壳」「齿轮传动机构」「底座与电源模块」；
+2. 每个零件必须且只能属于一个组；实在判断不了的放进「其他零件」组；
+3. 每组写 role：一句话说明它在整机的什么位置、起什么作用（≤40 字）；
+4. 零件中文名只用中文技术名词，不含数字编号、英文字母、件号；同类件用「第一/第二」区分；螺钉、连接器、泡棉等小件也要有名字；
+5. 已有人工名称的零件沿用原名；优先采用术语库与 BOM 里的叫法；
+6. 判断依据要用上尺寸与位置：例如沿主轴最高处、带孔栅的块状件可能是风扇或散热件，直径大而薄的环可能是轴承或磁环。
+只输出 JSON：{"groups":[{"name":"组名","role":"一句说明","parts":["零件名原样"]}],"parts":{"零件名原样":{"name":"中文名","confidence":"high|medium|low"}}}"""
+
+
+def excluded_by_plan(plan: dict):
+    """plan.source.exclude 的 glob：被排除的件（工装、包装内托等）不参与结构识别与展示。"""
+    import fnmatch
+    globs = list(((plan or {}).get("source") or {}).get("exclude") or [])
+    return lambda name: any(fnmatch.fnmatchcase(name, g) for g in globs)
+
+
+def _structure_input(assembly: dict, plan: dict) -> dict:
+    terms = {t.get("selector"): (t.get("term") or "").strip() for t in plan.get("terms", [])}
+    skip = excluded_by_plan(plan)
+    rows = []
+    for p in assembly.get("parts", []):
+        if p.get("degenerate") or skip(p["name"]):
+            continue
+        c = (p.get("centers") or [[0, 0, 0]])[0]
+        rows.append({"name": p["name"], "instances": p.get("instances", 1),
+                     "size_mm": [round(float(v), 1) for v in p.get("bbox_size", [])],
+                     "center_mm": [round(float(v), 1) for v in c],
+                     "path": (p.get("path_sample") or "")[-110:],
+                     **({"人工名称": terms[p["name"]]} if terms.get(p["name"]) else {})})
+    return {"整机包围盒": assembly.get("bbox"),
+            "主轴": (assembly.get("principal_axis") or {}).get("vector"),
+            "零件": rows}
+
+
+def analyze_structure(assembly: dict, plan: dict, *, glossary: Optional[Dict[str, str]] = None,
+                      bom: Optional[Dict[str, str]] = None, cfg: Optional[dict] = None) -> dict:
+    data = _structure_input(assembly, plan)
+    if glossary:
+        data["术语库（已递交专利用过的名字）"] = glossary
+    if bom:
+        data["BOM 匹配到的物料名称"] = bom
+    out = chat_json(STRUCT_SYSTEM, json.dumps(data, ensure_ascii=False), max_tokens=24000, cfg=cfg)
+    if not isinstance(out, dict):
+        raise LLMError("模型返回的不是 JSON 对象")
+    return clean_structure(out, assembly, plan, source="ai",
+                           provider=public_settings().get("provider_label", ""))
+
+
+def clean_structure(raw: dict, assembly: dict, plan: dict, *, source: str,
+                    provider: str = "") -> dict:
+    """校验并补齐：每个零件恰好在一个组；名称不含数字字母；同名按尺寸区分。"""
+    skip = excluded_by_plan(plan)
+    parts = [p for p in assembly.get("parts", []) if not p.get("degenerate") and not skip(p["name"])]
+    known = {p["name"] for p in parts}
+    size = {p["name"]: float(p.get("max_dim") or 0) for p in parts}
+    human = {t.get("selector"): (t.get("term") or "").strip() for t in plan.get("terms", [])}
+    seen, groups = set(), []
+    for g in raw.get("groups", []) or []:
+        if not isinstance(g, dict):
+            continue
+        members = [n for n in g.get("parts", []) or [] if n in known and n not in seen]
+        seen.update(members)
+        name = str(g.get("name", "")).strip()[:20] or "结构组"
+        if members:
+            groups.append({"name": name, "role": str(g.get("role", "")).strip()[:60],
+                           "parts": members})
+    rest = [p["name"] for p in parts if p["name"] not in seen]
+    if rest:
+        other = next((g for g in groups if g["name"] == "其他零件"), None)
+        if other:
+            other["parts"] += rest
+        else:
+            groups.append({"name": "其他零件", "role": "未能可靠归组的零件，可在此逐个查看", "parts": rest})
+    for i, g in enumerate(groups, start=1):
+        g["id"] = "g%d" % i
+        g["parts"].sort(key=lambda n: -size.get(n, 0))
+    rows = []
+    for n, v in (raw.get("parts") or {}).items():
+        if n not in known or not isinstance(v, dict):
+            continue
+        nm = str(v.get("name", "")).strip()
+        if human.get(n):
+            nm = human[n]
+        if not nm or re.search(r"[0-9A-Za-z_]", nm):
+            continue
+        rows.append({"selector": n, "term": nm, "label": "once",
+                     "confidence": v.get("confidence", "medium"), "reason": ""})
+    human_rows = [r for r in rows if human.get(r["selector"])]
+    ai_rows = _dedupe([r for r in rows if not human.get(r["selector"])], size,
+                      {v for v in human.values() if v})
+    names = {r["selector"]: {"name": r["term"], "confidence": r["confidence"]}
+             for r in human_rows + ai_rows}
+    return {"schema": "patent-structure/1", "source": source, "provider": provider,
+            "created": time.strftime("%Y-%m-%d %H:%M:%S"), "groups": groups, "names": names}
+
+
+def fallback_structure(assembly: dict, plan: Optional[dict] = None) -> dict:
+    """没有大模型时的兜底：按 STEP 装配层级的第一级子装配分组，单件归入「散件」。"""
+    skip = excluded_by_plan(plan or {})
+    parts = [p for p in assembly.get("parts", []) if not p.get("degenerate") and not skip(p["name"])]
+    buckets: Dict[str, List[str]] = {}
+    for p in parts:
+        segs = (p.get("path_sample") or p["name"]).split("/")
+        key = segs[1] if len(segs) > 2 else "__loose__"
+        buckets.setdefault(key, []).append(p["name"])
+    groups = []
+    loose = buckets.pop("__loose__", [])
+    for k, members in sorted(buckets.items(), key=lambda kv: -len(kv[1])):
+        if len(members) == 1:
+            loose += members
+            continue
+        groups.append({"name": "子装配 %d" % (len(groups) + 1),
+                       "role": "按 STEP 装配层级自动分组（%s）" % k[:28], "parts": members})
+    if loose:
+        groups.append({"name": "散件", "role": "装配层级里不属于任何子装配的零件", "parts": loose})
+    raw = {"groups": groups, "parts": {}}
+    out = clean_structure(raw, assembly, {"terms": [], "source": (plan or {}).get("source", {})},
+                          source="fallback")
+    return out

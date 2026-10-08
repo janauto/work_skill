@@ -53,9 +53,10 @@ WEBUI = PS.WEBUI
 DEFAULT_DATA = Path.home() / ".patent-workbench"
 DEFAULT_PORT = 8790
 PID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,47}$")
-FILE_RE = re.compile(r"^[A-Za-z0-9_\-]+\.(png|svg|dxf|dwg|json)$")
+FILE_RE = re.compile(r"^[A-Za-z0-9_\-]+\.(png|svg|dxf|dwg|json|glb)$")
 MEDIA = {"png": "image/png", "svg": "image/svg+xml", "dxf": "application/octet-stream",
-         "dwg": "application/octet-stream", "json": "application/json"}
+         "dwg": "application/octet-stream", "json": "application/json",
+         "glb": "model/gltf-binary"}
 PROTECTED = ("/api/wb", "/v1/", "/mcp", "/files/")
 SYNTHETIC_STEP = REPO / "tests" / "fixtures" / "synthetic.stp"
 
@@ -102,6 +103,14 @@ class Project:
     def workspace(self) -> PS.Workspace:
         return PS.Workspace(Path(self.meta["step"]), self.root / "studio")
 
+    def _structure_brief(self) -> dict:
+        try:
+            data = json.loads((self.root / "studio" / "structure.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"source": None, "groups": []}
+        return {"source": data.get("source"),
+                "groups": [{"name": g["name"], "count": len(g["parts"])} for g in data.get("groups", [])]}
+
     def summary(self) -> dict:
         m = self.meta
         studio = self.root / "studio"
@@ -121,6 +130,7 @@ class Project:
             "figures": len(figs), "figures_pass": sum(1 for f in figs if f.get("pass")),
             "flowcharts": len(list((studio / "flowcharts").glob("*.json"))),
             "rendered_at": last.get("finished_at"),
+            "structure": self._structure_brief(),
             "thumb": ("/files/%s/out/%s" % (self.id, Path(thumb).name)) if thumb else None,
         }
 
@@ -216,6 +226,28 @@ class Registry:
                 proj.update(message="")
             except Exception as exc:
                 proj.update(message="出图未完成：%s" % exc)
+        self._auto_structure(proj)
+
+    def _auto_structure(self, proj: Project) -> None:
+        """有大模型通道且还没识别过结构时，后台识别一次（推理模型可能要几分钟）。"""
+        studio = proj.root / "studio"
+        if (studio / "structure.json").is_file():
+            return
+        if LLM.public_settings().get("provider") in (None, "none"):
+            return
+        keep = proj.meta.get("message", "")
+        proj.update(message="AI 正在识别结构…")
+        try:
+            ws = proj.workspace()
+            data = LLM.analyze_structure(
+                json.loads(ws.assembly.read_text(encoding="utf-8")),
+                json.loads(ws.plan.read_text(encoding="utf-8")),
+                glossary=EXT.glossary_of(ws), bom=EXT.bom_names_of(ws))
+            (studio / "structure.json").write_text(
+                json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+            proj.update(message=keep)
+        except Exception as exc:
+            proj.update(message="结构识别未完成：%s（可在工程里手动重试）" % str(exc)[:80])
 
     def app_for(self, pid: str):
         proj = self.get(pid)
@@ -337,6 +369,16 @@ class Tools:
                 "studio": "%s/p/%s/" % (self.base, pid),
                 "log_tail": (res.get("log") or "")[-1500:] if not res.get("ok") else ""}
 
+    def get_project_structure(self, args: dict) -> dict:
+        studio = self.reg.studio(args.get("project_id", ""))
+        data = EXT.load_structure(studio.ws)
+        names = data.get("names") or {}
+        groups = [{"name": g["name"], "role": g.get("role", ""),
+                   "parts": [{"selector": n, "name": names.get(n, {}).get("name", "")}
+                             for n in g["parts"]]} for g in data.get("groups", [])]
+        return {"project_id": args["project_id"], "source": data.get("source"),
+                "provider": data.get("provider", ""), "groups": groups}
+
     def ai_draft_terms(self, args: dict) -> dict:
         studio = self.reg.studio(args.get("project_id", ""))
         ws = studio.ws
@@ -406,7 +448,8 @@ class Tools:
 
     def table(self) -> dict:
         return {name: getattr(self, name) for name in (
-            "list_projects", "get_project_parts", "update_terms", "render_project",
+            "list_projects", "get_project_structure", "get_project_parts", "update_terms",
+            "render_project",
             "get_project_figures", "ai_draft_terms", "get_flowchart_guide",
             "render_flowchart", "generate_flowchart")}
 
@@ -564,13 +607,30 @@ def build_workbench(reg: Registry, token: str, port: int) -> FastAPI:
         return {"ok": True, "reply": out, "seconds": round(time.time() - t0, 1),
                 "provider": LLM.public_settings()["provider_label"]}
 
+    @app.get("/api/wb/projects/{pid}/structure", include_in_schema=False)
+    def wb_structure(pid: str):
+        proj = reg.need(pid)
+        if proj.meta.get("status") != "ready":
+            raise HTTPException(409, "工程还没准备好")
+        return EXT.load_structure(proj.workspace())
+
+    @app.get("/api/wb/showcase", include_in_schema=False)
+    def wb_showcase():
+        return build_showcase(reg)
+
     # ---- files -------------------------------------------------------------
     @app.get("/files/{pid}/{area}/{name}", include_in_schema=False)
     def files(pid: str, area: str, name: str):
-        if not FILE_RE.match(name) or area not in ("out", "flow"):
+        if not FILE_RE.match(name) or area not in ("out", "flow", "model", "snap"):
             raise HTTPException(400, "非法路径")
         if pid == "_scratch":
             path = reg.data / "scratch" / name
+        elif area == "snap":
+            path = reg.need(pid).root / "studio" / "snapshots" / name
+        elif area == "model":
+            if name != "model.glb":
+                raise HTTPException(400, "非法路径")
+            path = reg.need(pid).root / "studio" / "model.glb"
         else:
             proj = reg.need(pid)
             sub = "out" if area == "out" else "flow_out"
@@ -595,6 +655,10 @@ def build_workbench(reg: Registry, token: str, port: int) -> FastAPI:
     @app.get("/v1/projects", tags=["工程"], summary="列出工程")
     def v1_projects():
         return call("list_projects", {})
+
+    @app.get("/v1/projects/{pid}/structure", tags=["工程"], summary="结构组（AI 识别的中文结构与零件名）")
+    def v1_structure(pid: str):
+        return call("get_project_structure", {"project_id": pid})
 
     @app.get("/v1/projects/{pid}/parts", tags=["工程"], summary="零件清单（起名用）")
     def v1_parts(pid: str, only_unnamed: bool = True):
@@ -661,6 +725,83 @@ def build_workbench(reg: Registry, token: str, port: int) -> FastAPI:
 
     app.state.tools = tools
     return app
+
+
+def build_showcase(reg: "Registry") -> dict:
+    """首页功能介绍的素材：全部取自本机示例工程（不进 git），按通用规则挑选。"""
+    examples = [p for p in reg.all() if p.meta.get("example") and p.meta.get("status") == "ready"]
+    figures, flows, live, names = [], [], None, []
+    for p in examples:
+        studio = p.root / "studio"
+        try:
+            last = json.loads((studio / "last_render.json").read_text(encoding="utf-8"))
+            plan = json.loads((studio / "plan.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        kinds = {f["id"]: f.get("kind") for f in plan.get("figures", [])}
+        for f in last.get("figures", []):
+            ann = f.get("annotation") or {}
+            if not (f.get("pass") and ann.get("png")):
+                continue
+            figures.append({
+                "project": p.id, "project_title": p.meta.get("title", p.id),
+                "number": f.get("number"), "kind": kinds.get(f["id"]),
+                "rows": len((ann.get("table") or {}).get("rows") or []),
+                "caption": re.sub(r"^图\d+为", "", ann.get("figure_description", "")).rstrip("；。"),
+                "annotated": "/files/%s/out/%s_annotated.png" % (p.id, f["id"]),
+                "filing": "/files/%s/out/%s_filing.png" % (p.id, f["id"]),
+            })
+        for fl in EXT.list_flowcharts(SimpleWS(studio)):
+            r = fl.get("result") or {}
+            if r.get("ok"):
+                flows.append({"project": p.id, "project_title": p.meta.get("title", p.id),
+                              "caption": fl.get("title", ""), "label": r.get("caption", ""),
+                              "steps": len(r.get("steps", [])), "warned": bool(r.get("warnings")),
+                              "src": "/files/%s/flow/%s.png" % (p.id, fl["id"])})
+        sfile = studio / "structure.json"
+        if sfile.is_file():
+            data = EXT.load_structure(p.workspace())     # 已按 plan 的排除名单过滤
+            if data.get("source") == "ai":
+                snaps = {q.stem: "/files/%s/snap/%s" % (p.id, q.name)
+                         for q in sorted((studio / "snapshots").glob("*.png"))}
+                cand = {"project": p.id, "project_title": p.meta.get("title", p.id),
+                        "structure": data, "snaps": snaps}
+                # 有展示图的优先；都有或都没有时取排序在前的示例
+                if live is None or (snaps and not live["snaps"]):
+                    live = cand
+    struct = None
+    if live:   # 结构卡、对照卡、透明 / 爆炸卡讲同一台机器
+        data = live["structure"]
+        nm = data.get("names") or {}
+        groups = []
+        for g in data.get("groups", []):
+            cn = [nm[n]["name"] for n in g["parts"] if nm.get(n, {}).get("name")]
+            code = next((n for n in g["parts"] if nm.get(n, {}).get("name")
+                         and re.search(r"[A-Za-z_]", n)), None)
+            groups.append({"name": g["name"], "role": g.get("role", ""), "count": len(g["parts"]),
+                           "sample": cn[:4],
+                           "code": ({"code": code, "name": nm[code]["name"]} if code else None)})
+            if code:
+                names.append({"code": code, "name": nm[code]["name"], "group": g["name"]})
+        struct = {"project": live["project"], "project_title": live["project_title"],
+                  "provider": data.get("provider", ""), "groups": groups,
+                  "total": sum(g["count"] for g in groups), "snaps": live["snaps"]}
+    assembly = [f for f in figures if f["kind"] == "assembly"]
+    exploded = sorted([f for f in figures if f["kind"] == "exploded"], key=lambda f: -f["rows"])
+    pick = {
+        "full": (assembly or figures or [None])[0],
+        "exploded": (exploded or [None])[0],
+        "detail": next((f for f in exploded if re.search(r"传动|齿轮|减速|机构", f["caption"])
+                        and f is not (exploded or [None])[0]), (exploded[1:] or [None])[0]),
+        "filing": None,
+        "flow": (sorted(flows, key=lambda f: (f["warned"], -f["steps"])) or [None])[0],
+    }
+    used = [pick["full"], pick["exploded"], pick["detail"]]
+    rest = [f for f in figures if all(f is not u for u in used)]
+    other = [f for f in rest if pick["exploded"] and f["project"] != pick["exploded"]["project"]]
+    pick["filing"] = (other or rest or [pick["full"]])[0]   # 递交版换一张不同的图
+    return {"structure": struct, "pick": pick, "names": names[:8],
+            "counts": {"examples": len(examples), "figures": len(figures), "flows": len(flows)}}
 
 
 class SimpleWS:

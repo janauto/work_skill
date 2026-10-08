@@ -408,13 +408,19 @@ def solve(spec: dict) -> Solved:
                     ed.points = [(sx, sy), (lx, sy), (lx, b.y), (b.left, b.y)]
                     ed.label_at = (sx - 1.0 - _text_w(ed.label, LABEL_H), sy + LABEL_H * 0.9)
                 else:
-                    # 右侧外道回环：自框底进入下方通道 → 最右走线道上行 → 目标上方通道 → 自顶并入
-                    cy = channel_below(a.row) - SLOT
+                    # 右侧外道回环：→ 最右走线道上行 → 目标上方通道 → 自顶并入
                     rx = lane_x("outer", 0)
                     ty = channel_below(b.row - 1) + SLOT if b.row > 0 else b.top + ROW_GAP / 2
-                    ed.points = [(a.x, a.bottom), (a.x, cy), (rx, cy), (rx, ty), (b.x, ty),
-                                 (b.x, b.top)]
-                    ed.label_at = (a.x + 2.0, a.bottom - LABEL_H * 0.9)
+                    right_free = not any(n.row == a.row and n.col > a.col for n in nodes.values())
+                    if a.kind == "decision" and right_free:
+                        # 判断框底部留给「是」分支：回环从右顶点出线，两个标签不叠
+                        ed.points = [(a.right, a.y), (rx, a.y), (rx, ty), (b.x, ty), (b.x, b.top)]
+                        ed.label_at = (a.right + 2.0, a.y + LABEL_H * 0.9)
+                    else:
+                        cy = channel_below(a.row) - SLOT
+                        ed.points = [(a.x, a.bottom), (a.x, cy), (rx, cy), (rx, ty), (b.x, ty),
+                                     (b.x, b.top)]
+                        ed.label_at = (a.x + 2.0, a.bottom - LABEL_H * 0.9)
             elif side:
                 sx, sy = (a.right, a.y)
                 ed.label_at = (sx + 2.0, sy + LABEL_H * 0.9)
@@ -464,12 +470,16 @@ def solve(spec: dict) -> Solved:
     width, height = x1 - x0, y1 - y0
 
     avail_h = FRAME_H - 3 * CAPTION_H
-    scale = min(1.0, FRAME_W / width, avail_h / height)
+    fit = min(1.0, FRAME_W / width, avail_h / height)
+    # 整图（框、间距、文字）同比例缩放；字高不得低于交付下限，所以缩放也不低于 floor/TEXT_H。
+    # 以前只把文字保底、框照缩，文字和步骤号就会溢出框外互相压住。
+    s_min = TEXT_FLOOR_MM / TEXT_H
+    scale = max(fit, s_min)
     warnings = []
-    floor_hit = TEXT_H * scale < TEXT_FLOOR_MM
+    floor_hit = fit < s_min
     if floor_hit:
-        warnings.append("流程过长：缩到 A4 可用区后字高 %.1f mm，低于 %.1f mm——建议拆成两张流程图"
-                        % (TEXT_H * scale, TEXT_FLOOR_MM))
+        warnings.append("流程过长：要放进 A4 可用区需缩到字高 %.1f mm（低于 %.1f mm），已保持 %.1f mm "
+                        "并超出页面——建议拆成两张流程图" % (TEXT_H * fit, TEXT_FLOOR_MM, TEXT_FLOOR_MM))
     return Solved(nodes, order, edges, width, height, scale, floor_hit,
                   str(spec.get("title", "")), warnings)
 
@@ -510,7 +520,7 @@ def write(spec: dict, out: Path, figure_number: Optional[int] = None) -> dict:
     lh = max(TEXT_FLOOR_MM, LABEL_H * s)
     w, h = sol.width * s, sol.height * s
     cap_band = 3 * CAPTION_H            # 图号紧贴流程图下方；图号 + 流程图整体在可用区内居中
-    block_bottom = max(0.0, (FRAME_H - h - cap_band) / 2)
+    block_bottom = (FRAME_H - h - cap_band) / 2   # 超出页面时为负：整图向下延伸，报告里已告警
     ox = (FRAME_W - w) / 2
     oy = block_bottom + cap_band
     cap_y = block_bottom + CAPTION_H * 1.2

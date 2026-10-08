@@ -5,7 +5,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { api } from './api.js';
 import {
   bus, state, figureColor, figuresContaining, resolveMembers, toggleSelect, partNames,
-  setSelection,
+  setSelection, groupOf, groupColor, displayName, globToRegExp,
 } from './state.js';
 
 const BASE = new THREE.Color('#b9b4a9');       // 未入图：暖灰（纸上铅稿的灰）
@@ -20,6 +20,13 @@ let isolate = false;
 let flashUntil = 0;
 const flashSet = new Set();
 let boxMode = false;
+// ---- 爆炸与透明：只改 3D 观察，不进 plan ----
+const meshBase = new Map();       // mesh -> {base: Vector3(本地), inv: Matrix3(父级世界→本地)}
+const partCenter = new Map();     // 零件名 -> 世界坐标中心（未爆炸）
+const partOffset = new Map();     // 零件名 -> 当前爆炸位移（世界坐标）
+let asmCenter = new THREE.Vector3();
+let asmAxis = new THREE.Vector3(0, 1, 0);
+let tip = null;
 const samples = new Map();        // 零件名 -> 世界坐标采样点 Float32Array（框选用，载入后算一次）
 const SAMPLE_PER_MESH = 360;
 
@@ -56,17 +63,34 @@ export function repaint() {
     ? resolveMembers((state.plan.figures || []).find((f) => f.id === active) || { members: [] })
     : new Set();
   const flashing = performance.now() < flashUntil;
+  const v = state.view;
+  const anySel = state.selection.size > 0;
+  const excluded = (state.plan?.source?.exclude || []).map(globToRegExp);
   meshesByName.forEach((meshes, name) => {
     const figs = figuresContaining(name);
     const inActive = activeMembers.has(name);
-    const color = figs.length
-      ? new THREE.Color(figureColor(inActive ? active : figs[0].id))
-      : BASE.clone();
-    if (figs.length && !inActive) color.lerp(BASE, 0.55); // 非当前图：褪成底色调
+    const g = groupOf(name);
+    let color;
+    if (v.colorBy === 'structure' && g) {
+      color = new THREE.Color(groupColor(g.id));
+    } else {
+      color = figs.length
+        ? new THREE.Color(figureColor(inActive ? active : figs[0].id))
+        : BASE.clone();
+      if (figs.length && !inActive) color.lerp(BASE, 0.55); // 非当前图：褪成底色调
+    }
+    let visible = !isolate || inActive || state.selection.has(name);
+    if (excluded.some((re) => re.test(name))) visible = false;   // 计划里排除的件（工装、托盘等）不显示
+    if (g && v.hiddenGroups.has(g.id)) visible = false;
+    if (v.soloGroup && (!g || g.id !== v.soloGroup) && !state.selection.has(name)) visible = false;
+    // 选中的零件始终实心；没选中任何零件时，透明度作用于全部零件
+    const op = anySel && state.selection.has(name) ? 1.0 : v.opacity;
     meshes.forEach((m) => {
-      m.visible = !isolate || inActive || state.selection.has(name);
+      m.visible = visible;
       m.material.color.copy(color);
-      m.material.opacity = figs.length || !active ? 1.0 : 0.92;
+      m.material.opacity = op * (figs.length || !active || v.colorBy === 'structure' ? 1.0 : 0.92);
+      m.material.depthWrite = m.material.opacity >= 0.995;
+      m.renderOrder = m.material.opacity >= 0.995 ? 0 : 1;
       m.material.emissive.set(0x000000);
       m.material.emissiveIntensity = 0.0;
       if (state.selection.has(name)) {
@@ -125,6 +149,70 @@ function pick(event) {
   return hits.length ? hits[0].object.userData.part : null;
 }
 
+// ---- 爆炸视图 ----
+function measureParts() {
+  scene.updateMatrixWorld(true);
+  const all = new THREE.Box3();
+  meshesByName.forEach((meshes, name) => {
+    const box = new THREE.Box3();
+    meshes.forEach((m) => {
+      box.expandByObject(m);
+      const inv = new THREE.Matrix4().copy(m.parent.matrixWorld).invert();
+      meshBase.set(m, { base: m.position.clone(), inv: new THREE.Matrix3().setFromMatrix4(inv) });
+    });
+    if (!box.isEmpty()) {
+      partCenter.set(name, box.getCenter(new THREE.Vector3()));
+      all.union(box);
+    }
+  });
+  asmCenter = all.getCenter(new THREE.Vector3());
+  const size = all.getSize(new THREE.Vector3());
+  const k = size.x >= size.y && size.x >= size.z ? 'x' : (size.y >= size.z ? 'y' : 'z');
+  asmAxis = new THREE.Vector3(k === 'x' ? 1 : 0, k === 'y' ? 1 : 0, k === 'z' ? 1 : 0);
+}
+
+function explodeDir(name, mode) {
+  const c = partCenter.get(name);
+  if (!c) return new THREE.Vector3();
+  if (mode === 'axis') {
+    const t = c.clone().sub(asmCenter).dot(asmAxis);
+    return asmAxis.clone().multiplyScalar(t * 2.2);
+  }
+  if (mode === 'radial') return c.clone().sub(asmCenter).multiplyScalar(1.6);
+  // 按结构：先把各结构组整体拉开，组内零件再小幅散开
+  const g = groupOf(name);
+  if (!g) return c.clone().sub(asmCenter).multiplyScalar(1.2);
+  const gc = new THREE.Vector3(); let n = 0;
+  g.parts.forEach((p) => { const pc = partCenter.get(p); if (pc) { gc.add(pc); n += 1; } });
+  if (n) gc.divideScalar(n);
+  return gc.clone().sub(asmCenter).multiplyScalar(1.7).add(c.clone().sub(gc).multiplyScalar(0.7));
+}
+
+export function applyExplode() {
+  const { explode, explodeMode } = state.view;
+  meshesByName.forEach((meshes, name) => {
+    const off = explode > 0 ? explodeDir(name, explodeMode).multiplyScalar(explode) : new THREE.Vector3();
+    partOffset.set(name, off);
+    meshes.forEach((m) => {
+      const b = meshBase.get(m);
+      if (!b) return;
+      m.position.copy(b.base).add(off.clone().applyMatrix3(b.inv));
+    });
+  });
+}
+
+function showTip(e, name) {
+  if (!tip) return;
+  if (!name || boxMode) { tip.hidden = true; return; }
+  const g = groupOf(name);
+  const cn = displayName(name);
+  tip.innerHTML = `<b>${cn || '未命名零件'}</b>${g ? `<span class="tip-g" style="--g:${groupColor(g.id)}">${g.name}</span>` : ''}<span class="tip-code">${name}</span>`;
+  const r = renderer.domElement.getBoundingClientRect();
+  tip.style.left = `${e.clientX - r.left + 14}px`;
+  tip.style.top = `${e.clientY - r.top + 12}px`;
+  tip.hidden = false;
+}
+
 // ---- 框选（CAD 惯例：左→右窗选，全在框内才选；右→左交叉选，碰到即选）----
 function buildSamples() {
   samples.clear();
@@ -152,9 +240,10 @@ function partsInRect(r, crossing) {
   samples.forEach((pts, name) => {
     const meshes = meshesByName.get(name) || [];
     if (!meshes.some((m) => m.visible) || !pts.length) return;
+    const off = partOffset.get(name) || new THREE.Vector3();
     let any = false; let all = true;
     for (let i = 0; i < pts.length; i += 3) {
-      v.set(pts[i], pts[i + 1], pts[i + 2]).project(camera);
+      v.set(pts[i] + off.x, pts[i + 1] + off.y, pts[i + 2] + off.z).project(camera);
       if (v.z > 1) { all = false; continue; }          // 相机背后
       const x = (v.x + 1) / 2 * rect.width;
       const y = (1 - v.y) / 2 * rect.height;
@@ -247,7 +336,13 @@ export async function initViewer(container) {
   collectMeshes(gltf.scene);
   frameAll();
   buildSamples();
+  measureParts();
   attachMarquee(container);
+  tip = document.createElement('div');
+  tip.className = 'part-tip';
+  tip.hidden = true;
+  container.appendChild(tip);
+  renderer.domElement.addEventListener('pointerleave', () => { tip.hidden = true; });
 
   const resize = () => {
     const { clientWidth: w, clientHeight: h } = container;
@@ -271,6 +366,7 @@ export async function initViewer(container) {
   renderer.domElement.addEventListener('pointermove', (e) => {
     if (boxMode && e.buttons) return;
     const name = pick(e);
+    showTip(e, name);
     if (name !== hovered) {
       hovered = name;
       container.style.cursor = name ? 'pointer' : 'grab';
@@ -287,12 +383,37 @@ export async function initViewer(container) {
   animate();
 
   bus.on('plan', repaint);
+  bus.on('view', () => { applyExplode(); repaint(); });
+  bus.on('structure', () => { applyExplode(); repaint(); });
   bus.on('selection', repaint);
   bus.on('active-figure', repaint);
   repaint();   // 初次上色：viewer 在 booted 事件之后才建好，错过了那班车
   const handle = {
     setIsolate(on) { isolate = on; repaint(); frameAll(); },
     setBoxMode,
+    snapshot(w = 1200, h = 1200) {   // 当前视角 → 固定尺寸、纸白底 PNG（dataURL），供「存为展示图」
+      const prev = { pr: renderer.getPixelRatio(), size: renderer.getSize(new THREE.Vector2()),
+        aspect: camera.aspect, pos: camera.position.clone(), target: controls.target.clone() };
+      renderer.setPixelRatio(1);
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      frameAll(1.75);
+      renderer.render(scene, camera);
+      const src = renderer.domElement;
+      const c = document.createElement('canvas');
+      c.width = src.width; c.height = src.height;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fbfaf5'; ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(src, 0, 0);
+      const url = c.toDataURL('image/png');
+      renderer.setPixelRatio(prev.pr);
+      renderer.setSize(prev.size.x, prev.size.y, false);
+      camera.aspect = prev.aspect;
+      camera.position.copy(prev.pos); controls.target.copy(prev.target);
+      camera.updateProjectionMatrix(); controls.update();
+      return url;
+    },
     frameAll,
     partCount: meshesByName.size,
     meshesByName, scene, camera,   // 本地调试句柄（单机工具，无隐私面）

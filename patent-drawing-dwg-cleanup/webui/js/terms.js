@@ -2,6 +2,7 @@
 // 行首数字只是预演）。含参数页签：layout 只暴露 schema 允许的枚举。
 import { bus, state, mutate, partByName, setSelection, flush } from './state.js';
 import { api } from './api.js';
+import { aiName } from './state.js';
 
 let root;
 // 与服务器 FORBIDDEN_TEXT_PATTERNS 同源的前端预警（权威判定在服务器）。
@@ -37,7 +38,7 @@ function renderTerms() {
       <td class="num${isNone ? ' num-off' : ''}">${i + 1}</td>
       <td class="mono sel" title="点击在 3D 中选中">${t.selector}${qty > 1 ? `<em>×${qty}</em>` : ''}</td>
       <td><input class="term-input${ai ? ` ai-${ai.confidence}` : ''}" data-idx="${i}" value="${t.term || ''}"
-                 placeholder="中文术语，如：底座"
+                 placeholder="${aiName(t.selector) ? `AI：${aiName(t.selector)}` : '中文术语，如：底座'}"
                  title="${issue ? issue.message : (ai ? `AI 起草（把握：${({ high: '高', medium: '中', low: '低' })[ai.confidence] || ai.confidence}）${ai.reason ? '：' + ai.reason : ''}` : '')}">${ai ? `<i class="ai-mark ai-${ai.confidence}" title="AI 起草">AI</i>` : ''}</td>
       <td><select class="label-sel" data-idx="${i}">
         <option value="once"${t.label !== 'all' && t.label !== 'none' ? ' selected' : ''}>标一次</option>
@@ -195,7 +196,7 @@ function renderParams(el) {
 export function initTerms(termsEl, paramsEl) {
   root = termsEl;
   const params = () => renderParams(paramsEl);
-  ['booted', 'plan', 'validate', 'ai-suggestions'].forEach((evt) => bus.on(evt, renderTerms));
+  ['booted', 'plan', 'validate', 'ai-suggestions', 'structure'].forEach((evt) => bus.on(evt, renderTerms));
   ['booted'].forEach((evt) => bus.on(evt, params));
   bus.on('plan-layout', params);
 }

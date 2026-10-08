@@ -2,7 +2,7 @@
 // 已有的 glob（比如 LLM 初稿或 "*"）原样展示，可整体移除。
 import {
   bus, state, mutate, resolveMembers, labelCount, figureColor,
-  setActiveFigure, setSelection,
+  setActiveFigure, setSelection, displayName,
 } from './state.js';
 
 let root;
@@ -26,8 +26,9 @@ function render() {
     const active = fig.id === state.activeFigure ? ' is-active' : '';
     const chips = (fig.members || []).map((m, i) => {
       const isGlob = /[*?\[]/.test(m);
-      const n = isGlob ? `<i>${m}</i>` : m;
-      return `<span class="chip mono${isGlob ? ' chip-glob' : ''}">${n}
+      const cn = isGlob ? '' : displayName(m);
+      const n = isGlob ? `<i>${m}</i>` : (cn || m);
+      return `<span class="chip${cn ? ' chip-cn' : ' mono'}${isGlob ? ' chip-glob' : ''}" title="${m}">${n}
         <button data-fig="${fig.id}" data-rm="${i}" title="移除">×</button></span>`;
     }).join('');
     return `<article class="fig-card${active}" data-fig="${fig.id}" style="--fig:${color}">
@@ -146,5 +147,5 @@ export function addSelectionTo(figId) {
 
 export function initFigures(el) {
   root = el;
-  ['booted', 'plan', 'selection', 'active-figure'].forEach((evt) => bus.on(evt, render));
+  ['booted', 'plan', 'selection', 'active-figure', 'structure'].forEach((evt) => bus.on(evt, render));
 }
