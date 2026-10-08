@@ -188,3 +188,11 @@ def test_workbench_end_to_end(tmp_path):
     assert "说明书附图_交底版.docx" in names and "附图说明.txt" in names
     assert any(n.startswith("交底版_带件号表/") for n in names)
     assert any(n.startswith("流程图/") for n in names)
+
+
+def test_compound_names_for_one_part_are_collapsed(monkeypatch):
+    """同一零件名的多个实例只能有一个名称：「第一阀座、第二阀座」收成「阀座」并降为待核对。"""
+    monkeypatch.setattr(L, "chat_json", lambda *a, **k: {"terms": [
+        {"selector": "SEAT", "term": "第一阀座、第二阀座", "label": "once", "confidence": "high"}]})
+    rows = L.draft_terms({"parts": [{"name": "SEAT", "bbox_size": [50, 8, 50]}]}, {"terms": []})
+    assert rows[0]["term"] == "阀座" and rows[0]["confidence"] == "low"

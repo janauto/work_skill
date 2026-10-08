@@ -198,6 +198,7 @@ TERMS_SYSTEM = """你是中国专利代理人，正在为机械/电子产品的�
 3. 同类多件用「第一/第二」区分，不用阿拉伯数字；
 4. 螺钉、垫片、连接器、端子、泡棉、电容电阻等标准件或微小件 label 设为 "none"（不标注），但 term 仍要写中文名（如「连接器」「缓冲泡棉」「螺钉」），不得留空；
 4.1 不同零件不得同名：同类件用「第一电路板」「第二电路板」区分；
+4.2 同一个零件名（instances>1）的多个实例共用一个名称，写「阀座」而不是「第一阀座、第二阀座」；
 5. 判断不了是什么的零件，term 写你最有把握的上位名称（如「壳体」「支架」），confidence 填 low；
 6. 优先使用「术语库」里已有的叫法——同一产品的已递交专利用过的名字要一致。
 只输出 JSON：{"terms":[{"selector":"零件名原样","term":"中文名","label":"once|none","confidence":"high|medium|low","reason":"一句话依据"}]}"""
@@ -234,6 +235,12 @@ def draft_terms(assembly: dict, plan: dict, *, glossary: Optional[Dict[str, str]
         if not isinstance(r, dict) or r.get("selector") not in names:
             continue
         term = str(r.get("term", "")).strip()
+        if re.search(r"[、，,/；;]", term):    # 「第一阀座、第二阀座」→「阀座」：一个零件名只能有一个名称
+            parts_ = [re.sub(r"^第[一二三四五六七八九十]+", "", x).strip()
+                      for x in re.split(r"[、，,/；;]", term) if x.strip()]
+            term = parts_[0] if parts_ and len(set(parts_)) == 1 else (parts_[0] if parts_ else "")
+            r = dict(r, confidence="low",
+                     reason=("模型给了多个名称，已收为一个；" + str(r.get("reason", "")))[:80])
         if not term or re.search(r"[0-9A-Za-z_]", term):
             continue                       # 数字、件号、英文一律不收
         clean.append({"selector": r["selector"], "term": term,
